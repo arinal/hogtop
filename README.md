@@ -28,8 +28,20 @@ cargo run --release
 
 A `cargo install --path .` will drop a `hogtop` binary in `~/.cargo/bin/`.
 
-Requires a real TTY (raw mode), so it won't work piped or with
-redirected stdin.
+The interactive TUI requires a real TTY (raw mode), so it won't work piped or
+with redirected stdin.
+
+### Snapshot mode (non-interactive)
+
+For scripts, CI, or piping — sample for a few seconds and print a plain table:
+
+```sh
+hogtop --once               # 3s window, top 10
+hogtop --once --secs 5      # 5s window
+hogtop --once --top 25      # top 25 rows
+```
+
+No TTY needed; output goes to stdout.
 
 ## Keybinds
 

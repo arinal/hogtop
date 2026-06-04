@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use sysinfo::{Pid, ProcessesToUpdate, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -21,8 +21,14 @@ pub struct ProcSnapshot {
 pub fn spawn(tx: mpsc::Sender<Snapshot>, interval: Duration) -> JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
         let mut system = System::new();
+        // CPU + memory refresh every tick; cmd only needs fetching once
+        // (a process's command line is fixed for its lifetime).
+        let refresh = ProcessRefreshKind::nothing()
+            .with_cpu()
+            .with_memory()
+            .with_cmd(UpdateKind::OnlyIfNotSet);
         loop {
-            system.refresh_processes(ProcessesToUpdate::All, true);
+            system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
             let snapshot = build_snapshot(&system);
             if tx.blocking_send(snapshot).is_err() {
                 return;

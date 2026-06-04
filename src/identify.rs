@@ -221,24 +221,12 @@ fn identify_chromium(exe: &str, parts: &[&str]) -> String {
         "chromium" | "chromium-browser" => "Chromium",
         _ => "Chrome",
     };
-
-    let proc_type = parts
-        .iter()
-        .find_map(|p| p.strip_prefix("--type="))
-        .unwrap_or("main");
-
-    let detail = match proc_type {
-        "gpu-process" => "GPU",
-        "renderer" => "renderer",
-        "utility" => extract_utility_type(parts).unwrap_or("utility"),
-        "zygote" => "zygote",
-        "broker" => "broker",
-        "crashpad-handler" => "crashpad",
-        "main" => "main",
-        other => other,
-    };
-
-    format!("{base} ({detail})")
+    match chromium_type_detail(parts) {
+        Some(detail) => format!("{base} — {detail}"),
+        // The browser/main process carries no --type= switch (see
+        // RenderProcessHostImpl::AppendRendererCommandLine; absence is the signal).
+        None => format!("{base} — browser"),
+    }
 }
 
 fn identify_electron(exe: &str, parts: &[&str]) -> String {
@@ -253,36 +241,138 @@ fn identify_electron(exe: &str, parts: &[&str]) -> String {
         "cursor" => "Cursor",
         _ => exe,
     };
-
-    let proc_type = parts
-        .iter()
-        .find_map(|p| p.strip_prefix("--type="));
-
-    match proc_type {
-        Some("gpu-process") => format!("{app_name} (GPU)"),
-        Some("renderer") => format!("{app_name} (renderer)"),
-        Some("utility") => format!("{app_name} (utility)"),
-        Some(other) => format!("{app_name} ({other})"),
+    // Electron is Chromium, so the same --type= taxonomy applies. The main
+    // process (no --type=) is shown as just the app name.
+    match chromium_type_detail(parts) {
+        Some(detail) => format!("{app_name} — {detail}"),
         None => app_name.to_string(),
     }
 }
 
-fn extract_utility_type(parts: &[&str]) -> Option<&'static str> {
-    for part in parts {
-        if let Some(sub) = part.strip_prefix("--utility-sub-type=") {
-            if sub.contains("NetworkService") {
-                return Some("network");
-            }
-            if sub.contains("StorageService") {
-                return Some("storage");
-            }
-            if sub.contains("AudioService") {
-                return Some("audio");
-            }
-            if sub.contains("VideoCapture") {
-                return Some("video");
+/// Maps a Chromium child's `--type=` (plus sub-flags) to a human label.
+/// Returns `None` for the main/browser process, which carries no `--type=`.
+///
+/// Type values are authoritative per Chromium's `content_switches.cc`. The
+/// switch is stamped onto the child's argv at launch and exposed via
+/// `/proc/<pid>/cmdline` — see docs/chrome-processes.md.
+fn chromium_type_detail(parts: &[&str]) -> Option<String> {
+    let proc_type = parts.iter().find_map(|p| p.strip_prefix("--type="))?;
+    let detail = match proc_type {
+        "renderer" => {
+            if parts.contains(&"--extension-process") {
+                "renderer (extension)"
+            } else {
+                "renderer"
             }
         }
+        "gpu-process" => "GPU",
+        "utility" => extract_utility_type(parts).unwrap_or("utility"),
+        "zygote" => "zygote",
+        "sandbox-ipc" => "sandbox IPC", // Linux-only helper
+        // Not content/ process types, but seen in the wild: crashpad-handler
+        // comes from the Crashpad component, broker is the Windows sandbox.
+        "crashpad-handler" => "crashpad",
+        "broker" => "broker",
+        other => return Some(other.to_string()),
+    };
+    Some(detail.to_string())
+}
+
+fn extract_utility_type(parts: &[&str]) -> Option<&'static str> {
+    let sub = parts
+        .iter()
+        .find_map(|p| p.strip_prefix("--utility-sub-type="))?;
+    Some(if sub.contains("NetworkService") {
+        "Network service"
+    } else if sub.contains("StorageService") {
+        "Storage service"
+    } else if sub.contains("AudioService") {
+        "Audio service"
+    } else if sub.contains("DataDecoderService") {
+        "Data Decoder service"
+    } else if sub.contains("VideoCapture") {
+        "Video capture"
+    } else {
+        return None;
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::friendly_name;
+
+    // Representative cmdlines captured from a live browser. Renderer/helper
+    // cmdlines are space-joined (argv rewritten post-launch); friendly_name
+    // splits on whitespace, so both NUL- and space-joined inputs work.
+    const CHROME: &str = "/opt/google/chrome/chrome";
+
+    #[test]
+    fn chrome_process_types() {
+        assert_eq!(
+            friendly_name(&format!("{CHROME} --type=renderer --renderer-client-id=44")),
+            "Chrome — renderer"
+        );
+        assert_eq!(
+            friendly_name(&format!(
+                "{CHROME} --type=renderer --extension-process --renderer-client-id=7"
+            )),
+            "Chrome — renderer (extension)"
+        );
+        assert_eq!(
+            friendly_name(&format!("{CHROME} --type=gpu-process --ozone-platform=wayland")),
+            "Chrome — GPU"
+        );
+        assert_eq!(
+            friendly_name(&format!("{CHROME} --type=zygote")),
+            "Chrome — zygote"
+        );
+        assert_eq!(
+            friendly_name(&format!("{CHROME} --type=sandbox-ipc")),
+            "Chrome — sandbox IPC"
+        );
+        // Browser/main process: no --type= switch.
+        assert_eq!(friendly_name(CHROME), "Chrome — browser");
     }
-    None
+
+    #[test]
+    fn chrome_utility_subtypes() {
+        let case = |svc: &str| {
+            friendly_name(&format!(
+                "{CHROME} --type=utility --utility-sub-type={svc} --lang=en-US"
+            ))
+        };
+        assert_eq!(case("network.mojom.NetworkService"), "Chrome — Network service");
+        assert_eq!(case("storage.mojom.StorageService"), "Chrome — Storage service");
+        assert_eq!(case("audio.mojom.AudioService"), "Chrome — Audio service");
+        assert_eq!(
+            case("data_decoder.mojom.DataDecoderService"),
+            "Chrome — Data Decoder service"
+        );
+        // Unknown sub-type falls back to the bare "utility".
+        assert_eq!(case("some.mojom.MysteryService"), "Chrome — utility");
+    }
+
+    #[test]
+    fn chromium_branding() {
+        assert_eq!(
+            friendly_name("/usr/bin/chromium --type=gpu-process"),
+            "Chromium — GPU"
+        );
+    }
+
+    #[test]
+    fn electron_apps_reuse_taxonomy() {
+        assert_eq!(
+            friendly_name("/usr/share/code/code --type=renderer"),
+            "VS Code — renderer"
+        );
+        assert_eq!(friendly_name("/usr/bin/slack --type=gpu-process"), "Slack — GPU");
+        // Electron main process → just the app name.
+        assert_eq!(friendly_name("/usr/share/code/code"), "VS Code");
+    }
+
+    #[test]
+    fn non_browser_passes_through() {
+        assert_eq!(friendly_name("/usr/bin/htop"), "/usr/bin/htop");
+    }
 }

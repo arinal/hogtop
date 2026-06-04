@@ -7,6 +7,30 @@ use ratatui::{
 
 use crate::app::App;
 
+/// Renders the ranked table as plain text (no TTY) for snapshot/`--once` mode.
+pub fn render_plain(app: &App, top: usize) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "hogtop — window: {}s · {} procs · sort: {}\n",
+        app.window_elapsed().as_secs(),
+        app.proc_count(),
+        app.sort_by().label(),
+    ));
+    out.push_str(&format!(
+        "{:>7}  {:>6}  {:>9}  CMD\n",
+        "PID", "CPU%", "MEM avg"
+    ));
+    for r in app.rank_top(top) {
+        let mem_mb = r.avg_memory_bytes / 1024 / 1024;
+        let mark = if r.state.is_new { '*' } else { ' ' };
+        out.push_str(&format!(
+            "{mark}{:>6}  {:>6.1}  {:>6} MB  {}\n",
+            r.pid, r.cpu_pct, mem_mb, r.state.cmd,
+        ));
+    }
+    out
+}
+
 pub fn render(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
