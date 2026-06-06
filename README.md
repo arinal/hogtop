@@ -51,6 +51,7 @@ No TTY needed; output goes to stdout.
 | `c`                    | Sort by CPU (default)                                                 |
 | `m`                    | Sort by average memory                                                |
 | `v`                    | Cycle view size: 10 → 50 → 100 → 10…                                 |
+| `g`                    | Toggle grouping of multi-process apps — Chromium browsers (Chrome/Chromium) and Electron apps (on by default): one row per app, CPU/memory summed across its processes. Off = one row per process (per-tab/per-renderer). |
 | `d`                    | Send SIGTERM (graceful) to the selected process — confirms with `y/n` |
 | `D`                    | Send SIGKILL (force) to the selected process — confirms with `y/n`    |
 | `r`                    | Reset the averaging window — re-baselines all processes               |
