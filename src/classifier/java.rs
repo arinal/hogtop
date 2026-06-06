@@ -8,18 +8,18 @@ use super::{Classifier, Platform};
 pub(super) struct JavaClassifier;
 
 impl Classifier for JavaClassifier {
-    fn matches(&self, exe: &str, _parts: &[&str]) -> bool {
+    fn matches(&self, exe: &str, _argv: &[&str]) -> bool {
         matches!(exe, "java" | "javaw" | "java.exe")
     }
     fn platform(&self) -> Platform {
         Platform::Java
     }
-    fn label(&self, _exe: &str, parts: &[&str]) -> String {
-        if let Some(main_class) = Self::main_class(parts) {
+    fn label(&self, _exe: &str, argv: &[&str]) -> String {
+        if let Some(main_class) = Self::main_class(argv) {
             return Self::known_app(&main_class)
                 .unwrap_or_else(|| format!("java: {}", Self::shorten_class(&main_class)));
         }
-        if let Some(jar) = Self::jar(parts) {
+        if let Some(jar) = Self::jar(argv) {
             return Self::known_jar(jar)
                 .unwrap_or_else(|| format!("java: {}", Self::jar_basename(jar)));
         }
@@ -28,10 +28,10 @@ impl Classifier for JavaClassifier {
 }
 
 impl JavaClassifier {
-    fn main_class(parts: &[&str]) -> Option<String> {
+    fn main_class(argv: &[&str]) -> Option<String> {
         let mut skip_next = false;
         let mut past_options = false;
-        for &part in parts.iter().skip(1) {
+        for &part in argv.iter().skip(1) {
             if skip_next {
                 skip_next = false;
                 continue;
@@ -60,9 +60,9 @@ impl JavaClassifier {
         None
     }
 
-    fn jar<'a>(parts: &[&'a str]) -> Option<&'a str> {
+    fn jar<'a>(argv: &[&'a str]) -> Option<&'a str> {
         let mut next_is_jar = false;
-        for &part in parts.iter().skip(1) {
+        for &part in argv.iter().skip(1) {
             if next_is_jar {
                 return Some(part);
             }

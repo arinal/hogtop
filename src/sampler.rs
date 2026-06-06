@@ -77,9 +77,12 @@ impl Sampler {
 /// Per-process facts gathered in the first pass, used to resolve labels and
 /// group keys with parent inheritance in the second.
 struct Proc {
-    raw_cmd: String,
+    /// argv as owned strings — we keep the original tokenization from sysinfo
+    /// because joining+resplitting on whitespace destroys macOS paths whose
+    /// argv[0] contains spaces (e.g. `/Applications/Google Chrome.app/...`).
+    argv: Vec<String>,
     parent: Option<Pid>,
-    /// Electron app identity from this process's own cmdline, if any.
+    /// Electron app identity from this process's own argv, if any.
     app: Option<String>,
     cpu_ms: u64,
     memory_bytes: u64,
@@ -97,12 +100,13 @@ impl Sampler {
             .iter()
             .filter(|(_, p)| p.thread_kind().is_none())
             .map(|(pid, p)| {
-                let raw_cmd = raw_cmdline(p);
-                let app = classifier::group_app(&raw_cmd);
+                let argv = argv_strings(p);
+                let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+                let app = classifier::group_app(&argv_refs);
                 (
                     *pid,
                     Proc {
-                        raw_cmd,
+                        argv,
                         parent: p.parent(),
                         app,
                         cpu_ms: p.accumulated_cpu_time(),
@@ -120,7 +124,8 @@ impl Sampler {
         let procs = procs_by_pid
             .iter()
             .map(|(pid, proc)| {
-                let groupable = classifier::is_groupable_family(&proc.raw_cmd);
+                let argv: Vec<&str> = proc.argv.iter().map(String::as_str).collect();
+                let groupable = classifier::is_groupable_family(&argv);
                 let inherited = if groupable && proc.app.is_none() {
                     inherited_app(*pid, &procs_by_pid)
                 } else {
@@ -132,11 +137,11 @@ impl Sampler {
                     None
                 };
                 let cmd = if proc.app.is_some() {
-                    classifier::friendly_name(&proc.raw_cmd)
+                    classifier::friendly_name(&argv)
                 } else if let Some(app) = &inherited {
-                    classifier::inherited_label(app, &proc.raw_cmd)
+                    classifier::inherited_label(app, &argv)
                 } else {
-                    classifier::friendly_name(&proc.raw_cmd)
+                    classifier::friendly_name(&argv)
                 };
                 ProcSnapshot {
                     pid: *pid,
@@ -144,7 +149,7 @@ impl Sampler {
                     cpu_ms: proc.cpu_ms,
                     memory_bytes: proc.memory_bytes,
                     group,
-                    platform: classifier::platform(&proc.raw_cmd),
+                    platform: classifier::platform(&argv),
                 }
             })
             .collect();
@@ -155,15 +160,17 @@ impl Sampler {
     }
 }
 
-fn raw_cmdline(p: &Process) -> String {
+fn argv_strings(p: &Process) -> Vec<String> {
     if p.cmd().is_empty() {
-        format!("[{}]", p.name().to_string_lossy())
+        // Kernel threads / processes with no readable cmdline. Box-bracketed,
+        // single token (the comm name) — preserves the empty-argv signal while
+        // giving classifiers something to display.
+        vec![format!("[{}]", p.name().to_string_lossy())]
     } else {
         p.cmd()
             .iter()
             .map(|s| s.to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join(" ")
+            .collect()
     }
 }
 

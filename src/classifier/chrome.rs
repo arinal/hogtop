@@ -1,4 +1,4 @@
-use super::{Classifier, Platform};
+use super::{outer_app_bundle, Classifier, Platform};
 
 // Chrome/Chromium browsers. Self-identifying on every process via `--type=`.
 // `proc_type`/`utility_type` are shared with Electron (which embeds Chromium).
@@ -6,18 +6,15 @@ use super::{Classifier, Platform};
 pub(super) struct ChromiumClassifier;
 
 impl Classifier for ChromiumClassifier {
-    fn matches(&self, exe: &str, _parts: &[&str]) -> bool {
-        Self::is_exe(exe)
+    fn matches(&self, exe: &str, argv: &[&str]) -> bool {
+        Self::is_exe(exe) || Self::brand_from_bundle(argv).is_some()
     }
     fn platform(&self) -> Platform {
         Platform::Chrome
     }
-    fn label(&self, exe: &str, parts: &[&str]) -> String {
-        let base = match exe {
-            "chromium" | "chromium-browser" => "Chromium",
-            _ => "Chrome",
-        };
-        match Self::proc_type(parts) {
+    fn label(&self, exe: &str, argv: &[&str]) -> String {
+        let base = Self::brand(exe, argv);
+        match Self::proc_type(argv) {
             Some(detail) => format!("{base} — {detail}"),
             // The browser/main process carries no --type= switch (absence is the signal).
             None => format!("{base} — browser"),
@@ -26,14 +23,8 @@ impl Classifier for ChromiumClassifier {
     fn groupable(&self) -> bool {
         true
     }
-    fn group(&self, exe: &str, _parts: &[&str]) -> Option<String> {
-        Some(
-            match exe {
-                "chromium" | "chromium-browser" => "Chromium",
-                _ => "Chrome",
-            }
-            .to_string(),
-        )
+    fn group(&self, exe: &str, argv: &[&str]) -> Option<String> {
+        Some(Self::brand(exe, argv).to_string())
     }
 }
 
@@ -45,22 +36,47 @@ impl ChromiumClassifier {
         )
     }
 
+    /// The display brand for this process: "Chrome" or "Chromium". Linux exes
+    /// are matched by basename; macOS processes are matched by their outermost
+    /// `.app` bundle (helpers live nested inside the parent app — basename
+    /// alone is something like "Google Chrome Helper (Renderer)").
+    fn brand(exe: &str, argv: &[&str]) -> &'static str {
+        match exe {
+            "chromium" | "chromium-browser" => "Chromium",
+            _ => Self::brand_from_bundle(argv).unwrap_or("Chrome"),
+        }
+    }
+
+    /// macOS only: the brand inferred from the outermost `.app` bundle on the
+    /// process's path. `None` on Linux (no bundle), or for an unfamiliar
+    /// `.app`. Edge/Brave/etc. are deliberately not lumped into "Chrome" — a
+    /// user wants to see the actual app they launched.
+    fn brand_from_bundle(argv: &[&str]) -> Option<&'static str> {
+        let bundle = outer_app_bundle(argv.first()?)?;
+        match bundle.as_str() {
+            "Google Chrome" | "Google Chrome Canary" | "Google Chrome Beta"
+            | "Google Chrome Dev" => Some("Chrome"),
+            "Chromium" => Some("Chromium"),
+            _ => None,
+        }
+    }
+
     /// Maps a Chromium child's `--type=` (plus sub-flags) to a human label.
     /// `None` for the main/browser process (no `--type=`). Type values are
     /// authoritative per Chromium's `content_switches.cc` — see
     /// docs/chrome-processes.md. Reused by Electron and inheritance.
-    pub(super) fn proc_type(parts: &[&str]) -> Option<String> {
-        let proc_type = parts.iter().find_map(|p| p.strip_prefix("--type="))?;
+    pub(super) fn proc_type(argv: &[&str]) -> Option<String> {
+        let proc_type = argv.iter().find_map(|p| p.strip_prefix("--type="))?;
         let detail = match proc_type {
             "renderer" => {
-                if parts.contains(&"--extension-process") {
+                if argv.contains(&"--extension-process") {
                     "renderer (extension)"
                 } else {
                     "renderer"
                 }
             }
             "gpu-process" => "GPU",
-            "utility" => Self::utility_type(parts).unwrap_or("utility"),
+            "utility" => Self::utility_type(argv).unwrap_or("utility"),
             "zygote" => "zygote",
             "sandbox-ipc" => "sandbox IPC", // Linux-only helper
             // Not content/ process types, but seen in the wild: crashpad-handler
@@ -72,8 +88,8 @@ impl ChromiumClassifier {
         Some(detail.to_string())
     }
 
-    fn utility_type(parts: &[&str]) -> Option<&'static str> {
-        let sub = parts
+    fn utility_type(argv: &[&str]) -> Option<&'static str> {
+        let sub = argv
             .iter()
             .find_map(|p| p.strip_prefix("--utility-sub-type="))?;
         Some(if sub.contains("NetworkService") {
