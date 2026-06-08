@@ -75,10 +75,12 @@ async fn run<R: Renderer, C: ProcessController>(renderer: &mut R, ctrl: C) -> Re
                 app.ingest(snapshot);
             }
             Some(Ok(CtEvent::Key(key))) = events.next() => {
-                if let Some(action) = map_key(key, app.has_pending_kill())
-                    && let Outcome::Quit = app.apply(action, &ctrl)
-                {
-                    return Ok(());
+                if let Some(action) = map_key(key, app.has_pending_kill()) {
+                    match app.apply(action, &ctrl) {
+                        Outcome::Quit => return Ok(()),
+                        Outcome::Copy(text) => renderer.copy_clipboard(&text)?,
+                        Outcome::Continue => {}
+                    }
                 }
             }
             _ = redraw.tick() => {}

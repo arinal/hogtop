@@ -12,6 +12,12 @@ pub use tui::{map_key, TuiRenderer};
 /// Port (algebra) for presenting `App` state. Each interpreter owns its sink.
 pub trait Renderer {
     fn present(&mut self, app: &App) -> Result<()>;
+
+    /// Copy `text` to the system clipboard. Default is a no-op — only the
+    /// interactive TUI (which owns a terminal that can carry the bytes) needs it.
+    fn copy_clipboard(&mut self, _text: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// The PID column: the pid for a single process, or a proc count for a group.

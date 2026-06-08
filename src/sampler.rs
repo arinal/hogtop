@@ -11,11 +11,19 @@ const CHANNEL_CAPACITY: usize = 8;
 pub struct Snapshot {
     pub taken_at: Instant,
     pub procs: Vec<ProcSnapshot>,
+    /// Total physical RAM, for sizing memory as a fraction of the system.
+    pub total_memory: u64,
+    /// RAM currently in use, system-wide.
+    pub used_memory: u64,
+    /// System-wide CPU usage, 0.0..=100.0 (averaged across cores).
+    pub cpu_usage: f32,
 }
 
 pub struct ProcSnapshot {
     pub pid: Pid,
     pub cmd: String,
+    /// Absolute path to the executable (empty if the kernel won't reveal it).
+    pub exe: String,
     pub cpu_ms: u64,
     pub memory_bytes: u64,
     /// Electron app this process belongs to (own identity or inherited from an
@@ -43,16 +51,20 @@ impl Sampler {
     pub fn new() -> Self {
         Self {
             system: System::new(),
-            // CPU + memory refresh every tick; cmd only needs fetching once
-            // (a process's command line is fixed for its lifetime).
+            // CPU + memory refresh every tick; cmd and exe only need fetching
+            // once (a process's command line and binary are fixed for its life).
             refresh: ProcessRefreshKind::nothing()
                 .with_cpu()
                 .with_memory()
-                .with_cmd(UpdateKind::OnlyIfNotSet),
+                .with_cmd(UpdateKind::OnlyIfNotSet)
+                .with_exe(UpdateKind::OnlyIfNotSet),
         }
     }
 
     pub fn sample(&mut self) -> Snapshot {
+        // System-wide CPU% and RAM totals, alongside the per-process table.
+        self.system.refresh_cpu_usage();
+        self.system.refresh_memory();
         self.system
             .refresh_processes_specifics(ProcessesToUpdate::All, true, self.refresh);
         self.build_snapshot()
@@ -84,6 +96,8 @@ struct Proc {
     parent: Option<Pid>,
     /// Electron app identity from this process's own argv, if any.
     app: Option<String>,
+    /// Absolute executable path (empty if the kernel won't reveal it).
+    exe: String,
     cpu_ms: u64,
     memory_bytes: u64,
 }
@@ -109,6 +123,10 @@ impl Sampler {
                         argv,
                         parent: p.parent(),
                         app,
+                        exe: p
+                            .exe()
+                            .map(|e| e.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
                         cpu_ms: p.accumulated_cpu_time(),
                         memory_bytes: p.memory(),
                     },
@@ -146,6 +164,7 @@ impl Sampler {
                 ProcSnapshot {
                     pid: *pid,
                     cmd,
+                    exe: proc.exe.clone(),
                     cpu_ms: proc.cpu_ms,
                     memory_bytes: proc.memory_bytes,
                     group,
@@ -156,6 +175,9 @@ impl Sampler {
         Snapshot {
             taken_at: Instant::now(),
             procs,
+            total_memory: system.total_memory(),
+            used_memory: system.used_memory(),
+            cpu_usage: system.global_cpu_usage(),
         }
     }
 }
@@ -165,13 +187,39 @@ fn argv_strings(p: &Process) -> Vec<String> {
         // Kernel threads / processes with no readable cmdline. Box-bracketed,
         // single token (the comm name) — preserves the empty-argv signal while
         // giving classifiers something to display.
-        vec![format!("[{}]", p.name().to_string_lossy())]
-    } else {
-        p.cmd()
-            .iter()
-            .map(|s| s.to_string_lossy().into_owned())
-            .collect()
+        return vec![format!("[{}]", p.name().to_string_lossy())];
     }
+    let cmd: Vec<String> = p.cmd().iter().map(|s| s.to_string_lossy().into_owned()).collect();
+    let exe = p.exe().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    detokenize(cmd, &exe)
+}
+
+/// Chromium-based apps (Chrome, every Electron app, Spotify, …) rewrite their
+/// own `/proc/self/cmdline` into a single space-joined string to set a friendly
+/// process title, erasing the NUL separators the kernel normally uses. sysinfo
+/// then returns the whole command line as one `argv[0]` element, which wrecks
+/// classification: `exe_basename` runs `Path::file_name` on the entire string
+/// and yields garbage (a Spotify renderer's "basename" comes out as the tail
+/// after `…Spotify/1.2.90.451`). When the lone element is the executable path
+/// followed by more text, re-split the trailing args on whitespace so the
+/// classifier sees real tokens again. argv[0] is peeled off as the known `exe`
+/// path first, so a macOS path that legitimately contains spaces (e.g.
+/// `…/Code - Insiders.app/…`) stays whole and is never re-split.
+fn detokenize(cmd: Vec<String>, exe: &str) -> Vec<String> {
+    if cmd.len() != 1 || exe.is_empty() {
+        return cmd;
+    }
+    // Require a clean boundary — the exe path then whitespace — so we don't
+    // mistake a longer path that merely shares this prefix for a rewrite. An
+    // exact match (no trailing text, e.g. an args-less main process) leaves the
+    // single element untouched.
+    let rest = match cmd[0].strip_prefix(exe) {
+        Some(r) if r.starts_with(char::is_whitespace) => r,
+        _ => return cmd,
+    };
+    std::iter::once(exe.to_string())
+        .chain(rest.split_whitespace().map(str::to_string))
+        .collect()
 }
 
 /// Walk the parent chain from `pid` and return the first ancestor's
@@ -192,4 +240,65 @@ fn inherited_app(pid: Pid, procs: &HashMap<Pid, Proc>) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detokenize;
+
+    fn v(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn splits_chromium_rewritten_cmdline() {
+        // The real shape of the Spotify-renderer bug: the whole command line
+        // arrives as a single space-joined element. We split it back into the
+        // exe path plus its flags so the classifier can recognise it.
+        let exe = "/home/me/.local/share/spotify-launcher/install/usr/share/spotify/spotify";
+        let joined = format!(
+            "{exe} --type=renderer --user-agent-product=Chrome/146 Spotify/1.2.90 \
+             --no-sandbox --autoplay-policy=no-user-gesture-required"
+        );
+        let got = detokenize(v(&[&joined]), exe);
+        assert_eq!(got[0], exe);
+        assert_eq!(got[1], "--type=renderer");
+        // exe basename survives for classification…
+        assert_eq!(
+            std::path::Path::new(&got[0]).file_name().unwrap().to_str().unwrap(),
+            "spotify"
+        );
+    }
+
+    #[test]
+    fn leaves_args_less_main_process_untouched() {
+        // A main process with no args is a single element equal to the exe —
+        // nothing to split, and we must not turn it into anything else.
+        let exe = "/usr/share/spotify/spotify";
+        assert_eq!(detokenize(v(&[exe]), exe), v(&[exe]));
+    }
+
+    #[test]
+    fn leaves_already_tokenized_cmdline_untouched() {
+        // The normal kernel case: NUL-separated argv arrives pre-split.
+        let exe = "/usr/share/spotify/spotify";
+        let argv = v(&[exe, "--type=zygote", "--no-sandbox"]);
+        assert_eq!(detokenize(argv.clone(), exe), argv);
+    }
+
+    #[test]
+    fn preserves_macos_exe_path_with_spaces() {
+        // macOS argv[0] legitimately contains spaces. It comes as a single
+        // element that exactly equals the exe, so it stays whole — never split
+        // on the spaces inside "Code - Insiders".
+        let exe = "/Applications/Visual Studio Code - Insiders.app/Contents/MacOS/Electron";
+        assert_eq!(detokenize(v(&[exe]), exe), v(&[exe]));
+    }
+
+    #[test]
+    fn leaves_single_element_alone_without_exe() {
+        // No exe path to anchor on (kernel wouldn't reveal it): don't guess.
+        let argv = v(&["1.2.90.451 --no-sandbox"]);
+        assert_eq!(detokenize(argv.clone(), ""), argv);
+    }
 }

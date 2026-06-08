@@ -8,12 +8,13 @@ use crate::classifier::Platform;
 use crate::control::ProcessController;
 use crate::sampler::{Sampler, Snapshot};
 
-pub const VIEW_SIZES: [usize; 3] = [10, 50, 100];
+pub const VIEW_SIZES: [usize; 3] = [25, 50, 100];
 const STATUS_TTL: Duration = Duration::from_secs(3);
 const MIN_WINDOW_SECS: f64 = 0.5;
 
 pub struct ProcState {
     pub cmd: String,
+    pub exe: String,
     pub group: Option<String>,
     pub platform: Platform,
     pub baseline_cpu_ms: u64,
@@ -54,6 +55,9 @@ impl ProcState {
 /// group (multiple PIDs, summed CPU/memory).
 pub struct Row {
     pub label: String,
+    /// Executable path of the (representative) process — what the copy key
+    /// yanks. Empty when the kernel won't reveal it (kernel threads, etc.).
+    pub exe: String,
     pub cpu_pct: f64,
     pub avg_memory_bytes: u64,
     pub pids: Vec<Pid>,
@@ -87,16 +91,26 @@ pub enum Action {
     RequestKill(Signal),
     ConfirmKill,
     CancelKill,
-    SortBy(SortBy),
+    ToggleSort,
     CycleViewSize,
     ToggleGroup,
+    /// Copy the selected process's executable path to the clipboard.
+    CopyPath,
 }
 
 impl SortBy {
     pub fn label(self) -> &'static str {
         match self {
-            SortBy::Cpu => "cpu",
-            SortBy::Memory => "mem",
+            SortBy::Cpu => "CPU",
+            SortBy::Memory => "RAM",
+        }
+    }
+
+    /// The other sort mode — backs the single toggle key.
+    pub fn toggled(self) -> Self {
+        match self {
+            SortBy::Cpu => SortBy::Memory,
+            SortBy::Memory => SortBy::Cpu,
         }
     }
 }
@@ -112,11 +126,16 @@ pub struct App {
     grouped: bool,
     status: Option<(String, Instant)>,
     pending_kill: Option<PendingKill>,
+    total_memory: u64,
+    used_memory: u64,
+    cpu_usage: f32,
 }
 
 pub enum Outcome {
     Continue,
     Quit,
+    /// The frontend should copy this text to the clipboard (IO it owns).
+    Copy(String),
 }
 
 impl App {
@@ -136,6 +155,9 @@ impl App {
             grouped: true,
             status: None,
             pending_kill: None,
+            total_memory: 0,
+            used_memory: 0,
+            cpu_usage: 0.0,
         }
     }
 
@@ -168,6 +190,9 @@ impl App {
             self.window_start = snapshot.taken_at;
             self.first_snapshot = true;
         }
+        self.total_memory = snapshot.total_memory;
+        self.used_memory = snapshot.used_memory;
+        self.cpu_usage = snapshot.cpu_usage;
         let live: HashSet<Pid> = snapshot.procs.iter().map(|p| p.pid).collect();
         self.procs.retain(|pid, _| live.contains(pid));
         for p in snapshot.procs {
@@ -182,6 +207,7 @@ impl App {
                 })
                 .or_insert_with(|| ProcState {
                     cmd: p.cmd,
+                    exe: p.exe,
                     group: p.group,
                     platform: p.platform,
                     baseline_cpu_ms: p.cpu_ms,
@@ -234,12 +260,10 @@ impl App {
                 self.pending_kill = None;
                 self.set_status("Cancelled");
             }
-            Action::SortBy(mode) => {
-                if self.sort_by != mode {
-                    self.sort_by = mode;
-                    self.selected = 0;
-                    self.set_status(&format!("Sorted by {}", mode.label()));
-                }
+            Action::ToggleSort => {
+                self.sort_by = self.sort_by.toggled();
+                self.selected = 0;
+                // No status message — the header's `sort:` label already shows it.
             }
             Action::CycleViewSize => {
                 self.cycle_view_size();
@@ -253,6 +277,21 @@ impl App {
                 } else {
                     "Ungrouped (per-process)"
                 });
+            }
+            Action::CopyPath => {
+                let rows = self.rank_top(self.top_n());
+                let idx = self.selected.min(rows.len().saturating_sub(1));
+                if let Some(row) = rows.get(idx) {
+                    // Fall back to the display label when the kernel hid the exe
+                    // path (kernel threads, restricted procs).
+                    let path = if row.exe.is_empty() {
+                        row.label.clone()
+                    } else {
+                        row.exe.clone()
+                    };
+                    self.set_status(&format!("Copied {path}"));
+                    return Outcome::Copy(path);
+                }
             }
         }
         Outcome::Continue
@@ -272,6 +311,7 @@ impl App {
                 (true, Some(group)) => {
                     let row = groups.entry(group.as_str()).or_insert_with(|| Row {
                         label: group.clone(),
+                        exe: p.exe.clone(),
                         cpu_pct: 0.0,
                         avg_memory_bytes: 0,
                         pids: Vec::new(),
@@ -286,6 +326,7 @@ impl App {
                 }
                 _ => singles.push(Row {
                     label: p.cmd.clone(),
+                    exe: p.exe.clone(),
                     cpu_pct,
                     avg_memory_bytes: mem,
                     pids: vec![*pid],
@@ -335,6 +376,21 @@ impl App {
 
     pub fn sort_by(&self) -> SortBy {
         self.sort_by
+    }
+
+    /// Total physical RAM (bytes), for sizing memory as a fraction of the system.
+    pub fn total_memory(&self) -> u64 {
+        self.total_memory
+    }
+
+    /// RAM currently in use, system-wide (bytes).
+    pub fn used_memory(&self) -> u64 {
+        self.used_memory
+    }
+
+    /// System-wide CPU usage, 0.0..=100.0.
+    pub fn cpu_usage(&self) -> f32 {
+        self.cpu_usage
     }
 
     pub fn status(&self) -> Option<&str> {
@@ -401,9 +457,13 @@ mod tests {
         let t0 = Instant::now();
         let mk = |t: Instant| Snapshot {
             taken_at: t,
+            total_memory: 16 * 1024 * 1024 * 1024,
+            used_memory: 8 * 1024 * 1024 * 1024,
+            cpu_usage: 0.0,
             procs: vec![ProcSnapshot {
                 pid: Pid::from_u32(pid),
                 cmd: "x".into(),
+                exe: "/usr/bin/x".into(),
                 cpu_ms: 0,
                 memory_bytes: 0,
                 group: None,
@@ -451,7 +511,7 @@ mod tests {
         let ctrl = RecordingController::default();
         app.apply(Action::SelectNext, &ctrl);
         app.apply(Action::CycleViewSize, &ctrl);
-        app.apply(Action::SortBy(SortBy::Memory), &ctrl);
+        app.apply(Action::ToggleSort, &ctrl);
         assert!(ctrl.sent.borrow().is_empty());
     }
 
@@ -468,11 +528,15 @@ mod tests {
         let t0 = Instant::now();
         let mk = |t: Instant| Snapshot {
             taken_at: t,
+            total_memory: 16 * 1024 * 1024 * 1024,
+            used_memory: 8 * 1024 * 1024 * 1024,
+            cpu_usage: 0.0,
             procs: procs
                 .iter()
                 .map(|(pid, group)| ProcSnapshot {
                     pid: Pid::from_u32(*pid),
                     cmd: group.unwrap_or("proc").to_string(),
+                    exe: format!("/usr/bin/{}", group.unwrap_or("proc")),
                     cpu_ms: 0,
                     memory_bytes: 0,
                     group: group.map(str::to_string),
