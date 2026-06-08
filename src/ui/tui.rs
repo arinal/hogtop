@@ -1,4 +1,5 @@
 use std::io::{self, Stdout};
+use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::{
@@ -30,6 +31,61 @@ const METER_WIDTH: u16 = 16;
 const METER_FULL_PCT: f64 = 100.0;
 /// The filled and empty meter cell glyph (btop uses `■`).
 const METER_CELL: char = '■';
+/// btop-style distance fade: a row dims by this much per step away from the
+/// selection (in either direction)…
+const FADE_STEP: f64 = 0.06;
+/// …capped here so even distant rows stay legible.
+const FADE_MAX: f64 = 0.66;
+
+/// A light/dark-aware color set derived from the terminal's real background, so
+/// the distance fade blends toward whatever the user is actually running. Text
+/// gets an explicit base color (a terminal's default foreground can't be
+/// blended toward the background), chosen to contrast with the detected theme.
+#[derive(Clone, Copy)]
+struct Palette {
+    /// The detected terminal background — the color every row fades toward.
+    bg: (u8, u8, u8),
+    /// Base foreground for ordinary row text before fading.
+    text: Color,
+    /// Empty (unfilled) meter cells: a low-contrast tint of the background.
+    meter_empty: Color,
+}
+
+impl Palette {
+    /// Derive the palette from the terminal background `bg`. Uses Rec. 601 luma
+    /// to decide light vs. dark: a light background needs dark text (and a dark
+    /// background light text) so rows stay legible until they fade away.
+    fn from_bg(bg: (u8, u8, u8)) -> Self {
+        let luma = 0.299 * bg.0 as f64 + 0.587 * bg.1 as f64 + 0.114 * bg.2 as f64;
+        if luma > 128.0 {
+            Self {
+                bg,
+                text: Color::Rgb(0x30, 0x30, 0x30),
+                meter_empty: Color::Rgb(0xc8, 0xc8, 0xc8),
+            }
+        } else {
+            Self {
+                bg,
+                text: Color::Rgb(0xcc, 0xcc, 0xcc),
+                meter_empty: Color::Rgb(0x3c, 0x3c, 0x3c),
+            }
+        }
+    }
+}
+
+/// Blend `color` toward the terminal background `bg` by `amount` (0.0..=1.0):
+/// 0.0 leaves it untouched, 1.0 fades fully into the background. This drives the
+/// fade — rows farther from the selection dim away regardless of theme. Only
+/// RGB colors fade; named colors pass through unchanged.
+fn fade(color: Color, amount: f64, bg: (u8, u8, u8)) -> Color {
+    let f = amount.clamp(0.0, 1.0);
+    if let Color::Rgb(r, g, b) = color {
+        let lerp = |c: u8, t: u8| (c as f64 + (t as f64 - c as f64) * f).round() as u8;
+        Color::Rgb(lerp(r, bg.0), lerp(g, bg.1), lerp(b, bg.2))
+    } else {
+        color
+    }
+}
 
 /// btop's load gradient: green → yellow → red, interpolated in two linear
 /// segments (0–50 green→yellow, 50–100 yellow→red), mirroring btop's
@@ -51,24 +107,23 @@ fn load_color(t: f64) -> Color {
 /// A gradient meter bar for `cpu_pct`: `METER_WIDTH` cells, each filled cell
 /// colored by its own position along the load gradient (so the bar shades
 /// green→red as it grows), empty cells dimmed. Mirrors btop's `Meter`.
-fn meter_spans(cpu_pct: f64) -> Vec<Span<'static>> {
+/// `fade_amt` dims the whole bar toward the background for the distance fade.
+fn meter_spans(cpu_pct: f64, fade_amt: f64, pal: Palette) -> Vec<Span<'static>> {
     let frac = (cpu_pct / METER_FULL_PCT).clamp(0.0, 1.0);
     let filled = (frac * METER_WIDTH as f64).round() as u16;
     (0..METER_WIDTH)
         .map(|i| {
-            if i < filled {
+            let color = if i < filled {
                 // Color each cell by its own height along the bar, like btop.
                 let cell_t = (i + 1) as f64 / METER_WIDTH as f64;
-                Span::styled(
-                    METER_CELL.to_string(),
-                    Style::default().fg(load_color(cell_t)),
-                )
+                load_color(cell_t)
             } else {
-                Span::styled(
-                    METER_CELL.to_string(),
-                    Style::default().fg(Color::DarkGray),
-                )
-            }
+                pal.meter_empty
+            };
+            Span::styled(
+                METER_CELL.to_string(),
+                Style::default().fg(fade(color, fade_amt, pal.bg)),
+            )
         })
         .collect()
 }
@@ -107,22 +162,33 @@ pub fn map_key(k: KeyEvent, kill_pending: bool) -> Option<Action> {
 pub struct TuiRenderer {
     terminal: Terminal<TuiBackend>,
     nerd_font: bool,
+    palette: Palette,
 }
 
 impl TuiRenderer {
     pub fn new(nerd_font: bool) -> Result<Self> {
+        // Ask the terminal for its background color before we take over the
+        // screen, so the distance fade can blend toward the real bg (light or
+        // dark). If the terminal doesn't answer (e.g. piped, or unsupported),
+        // fall back to assuming a dark theme.
+        let bg = termbg::rgb(Duration::from_millis(100))
+            .map(|c| ((c.r >> 8) as u8, (c.g >> 8) as u8, (c.b >> 8) as u8))
+            .unwrap_or((0, 0, 0));
+        let palette = Palette::from_bg(bg);
+
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
-        Ok(Self { terminal, nerd_font })
+        Ok(Self { terminal, nerd_font, palette })
     }
 }
 
 impl Renderer for TuiRenderer {
     fn present(&mut self, app: &App) -> Result<()> {
         let nerd_font = self.nerd_font;
-        self.terminal.draw(|f| render(f, app, nerd_font))?;
+        let palette = self.palette;
+        self.terminal.draw(|f| render(f, app, nerd_font, palette))?;
         Ok(())
     }
 }
@@ -136,7 +202,7 @@ impl Drop for TuiRenderer {
     }
 }
 
-fn render(f: &mut Frame, app: &App, nerd_font: bool) {
+fn render(f: &mut Frame, app: &App, nerd_font: bool, palette: Palette) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -147,7 +213,7 @@ fn render(f: &mut Frame, app: &App, nerd_font: bool) {
         .split(f.area());
 
     render_header(f, app, chunks[0]);
-    render_table(f, app, chunks[1], nerd_font);
+    render_table(f, app, chunks[1], nerd_font, palette);
     render_status(f, app, chunks[2]);
 }
 
@@ -171,7 +237,7 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn render_table(f: &mut Frame, app: &App, area: Rect, nerd_font: bool) {
+fn render_table(f: &mut Frame, app: &App, area: Rect, nerd_font: bool, pal: Palette) {
     let ranked = app.rank_top(app.top_n());
     let selected = app.selected().min(ranked.len().saturating_sub(1));
 
@@ -182,27 +248,39 @@ fn render_table(f: &mut Frame, app: &App, area: Rect, nerd_font: bool) {
             let mem_mb = r.avg_memory_bytes / 1024 / 1024;
             let mark = if r.is_new { "*" } else { " " };
             let selected_row = i == selected;
-            let style = if selected_row {
-                Style::default().fg(Color::Black).bg(Color::Yellow)
+            // Fade by distance from the selection (both directions). The
+            // selected row stays bright; its yellow highlight owns the colors,
+            // so we leave its cells unstyled and let the row style invert them.
+            let dist = i.abs_diff(selected);
+            let amount = (dist as f64 * FADE_STEP).min(FADE_MAX);
+            let (row_style, text_style, cpu_style, meter_fade) = if selected_row {
+                (
+                    Style::default().fg(Color::Black).bg(Color::Yellow),
+                    Style::default(),
+                    Style::default(),
+                    0.0,
+                )
             } else {
-                Style::default()
-            };
-            // CPU% colored by load, like btop — but on the selected row the
-            // yellow highlight owns the colors, so leave the text to invert.
-            let cpu_style = if selected_row {
-                Style::default()
-            } else {
-                Style::default().fg(load_color((r.cpu_pct / METER_FULL_PCT).clamp(0.0, 1.0)))
+                let cpu_t = (r.cpu_pct / METER_FULL_PCT).clamp(0.0, 1.0);
+                (
+                    Style::default(),
+                    Style::default().fg(fade(pal.text, amount, pal.bg)),
+                    Style::default().fg(fade(load_color(cpu_t), amount, pal.bg)),
+                    amount,
+                )
             };
             Row::new(vec![
-                Cell::from(mark.to_string()),
-                Cell::from(pid_cell(r)),
+                Cell::from(Span::styled(mark.to_string(), text_style)),
+                Cell::from(Span::styled(pid_cell(r), text_style)),
                 Cell::from(Span::styled(format!("{:>5.1}", r.cpu_pct), cpu_style)),
-                Cell::from(Line::from(meter_spans(r.cpu_pct))),
-                Cell::from(format!("{:>6} MB", mem_mb)),
-                Cell::from(format!("{} {}", icon_for(&r.label, r.platform, nerd_font), r.label)),
+                Cell::from(Line::from(meter_spans(r.cpu_pct, meter_fade, pal))),
+                Cell::from(Span::styled(format!("{:>6} MB", mem_mb), text_style)),
+                Cell::from(Span::styled(
+                    format!("{} {}", icon_for(&r.label, r.platform, nerd_font), r.label),
+                    text_style,
+                )),
             ])
-            .style(style)
+            .style(row_style)
         })
         .collect();
 

@@ -1,4 +1,4 @@
-mod snapshot;
+mod plain;
 mod tui;
 
 use anyhow::Result;
@@ -6,7 +6,7 @@ use anyhow::Result;
 use crate::app::{App, Row as AppRow};
 use crate::classifier::Platform;
 
-pub use snapshot::PlainRenderer;
+pub use plain::PlainRenderer;
 pub use tui::{map_key, TuiRenderer};
 
 /// Port (algebra) for presenting `App` state. Each interpreter owns its sink.
