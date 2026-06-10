@@ -14,7 +14,7 @@ use super::theme::{
     METER_FULL_PCT, METER_WIDTH,
 };
 use crate::app::{App, SortBy};
-use crate::ui::{icon_for, pid_cell};
+use crate::ui::{badges, pid_cell};
 
 pub(super) fn render(f: &mut Frame, app: &App, nerd_font: bool, palette: Palette) {
     let chunks = Layout::default()
@@ -102,7 +102,6 @@ fn render_table(f: &mut Frame, app: &App, area: Rect, nerd_font: bool, pal: Pale
         .enumerate()
         .map(|(i, r)| {
             let mem_mb = r.avg_memory_bytes / 1024 / 1024;
-            let mark = if r.is_new { "*" } else { " " };
             // The LOAD bar tracks whatever we're sorting by: CPU% over one core,
             // or memory as a share of total system RAM.
             let load_frac = match app.sort_by() {
@@ -131,23 +130,25 @@ fn render_table(f: &mut Frame, app: &App, area: Rect, nerd_font: bool, pal: Pale
                     amount,
                 )
             };
+            // Badge strip (platform · identity · grouped), then the label — one
+            // styled span so the badges fade and invert with the rest of the row.
+            let mut cmd = badges(r, nerd_font).join(" ");
+            if !cmd.is_empty() {
+                cmd.push(' ');
+            }
+            cmd.push_str(&r.label);
             Row::new(vec![
-                Cell::from(Span::styled(mark.to_string(), text_style)),
                 Cell::from(Span::styled(pid_cell(r), text_style)),
                 Cell::from(Line::from(meter_spans(load_frac, METER_WIDTH, meter_fade, pal))),
                 Cell::from(Span::styled(format!("{:>5.1}", r.cpu_pct), cpu_style)),
                 Cell::from(Span::styled(format!("{:>6} MB", mem_mb), text_style)),
-                Cell::from(Span::styled(
-                    format!("{} {}", icon_for(&r.label, r.platform, nerd_font), r.label),
-                    text_style,
-                )),
+                Cell::from(Span::styled(cmd, text_style)),
             ])
             .style(row_style)
         })
         .collect();
 
     let widths = [
-        Constraint::Length(2),
         Constraint::Length(8),
         Constraint::Length(METER_WIDTH),
         Constraint::Length(7),
@@ -159,7 +160,6 @@ fn render_table(f: &mut Frame, app: &App, area: Rect, nerd_font: bool, pal: Pale
     let table = Table::new(rows, widths)
         .header(
             Row::new(vec![
-                Cell::from(""),
                 Cell::from("PID"),
                 Cell::from(load_header),
                 Cell::from("CPU%"),

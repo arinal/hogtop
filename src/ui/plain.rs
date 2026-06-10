@@ -2,7 +2,7 @@ use std::io::Write;
 
 use anyhow::Result;
 
-use super::{icon_for, pid_cell, Renderer};
+use super::{badges, pid_cell, Renderer};
 use crate::app::App;
 
 /// Snapshot interpreter: writes the plain-text table to any `Write` sink.
@@ -41,12 +41,16 @@ fn render_plain(app: &App, top: usize, nerd_font: bool) -> String {
     for r in app.rank_top(top) {
         let mem_mb = r.avg_memory_bytes / 1024 / 1024;
         let mark = if r.is_new { '*' } else { ' ' };
+        let mut prefix = badges(&r, nerd_font).join(" ");
+        if !prefix.is_empty() {
+            prefix.push(' ');
+        }
         out.push_str(&format!(
-            "{mark}{:>6}  {:>6.1}  {:>6} MB  {} {}\n",
+            "{mark}{:>6}  {:>6.1}  {:>6} MB  {}{}\n",
             pid_cell(&r),
             r.cpu_pct,
             mem_mb,
-            icon_for(&r.label, r.platform, nerd_font),
+            prefix,
             r.label,
         ));
     }

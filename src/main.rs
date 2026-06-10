@@ -42,7 +42,7 @@ struct Args {
 async fn main() -> Result<()> {
     let args = Args::parse();
     if args.once {
-        run_snapshot(args)
+        run_snapshot(args.secs, args.top, args.nerd_font)
     } else {
         let nerd_font = args.nerd_font;
         let mut renderer = TuiRenderer::new(nerd_font)?;
@@ -54,9 +54,9 @@ async fn main() -> Result<()> {
 /// table. No background thread, raw mode, or alternate screen — nothing runs
 /// concurrently, so it works without a TTY and can be piped. CPU% needs >= 2
 /// samples, so the window is at least 2 ticks.
-fn run_snapshot(args: Args) -> Result<()> {
-    let app = App::sampled(args.secs, SAMPLE_INTERVAL);
-    PlainRenderer::new(io::stdout(), args.top, args.nerd_font).present(&app)
+fn run_snapshot(secs: u64, top: usize, nerd_font: bool) -> Result<()> {
+    let app = App::sampled(secs, SAMPLE_INTERVAL);
+    PlainRenderer::new(io::stdout(), top, nerd_font).present(&app)
 }
 
 async fn run<R: Renderer, C: ProcessController>(renderer: &mut R, ctrl: C) -> Result<()> {

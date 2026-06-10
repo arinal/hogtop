@@ -4,22 +4,28 @@ mod chrome;
 mod electron;
 mod firefox;
 mod java;
+mod node;
+mod python;
 
 use chrome::ChromiumClassifier;
 use electron::ElectronClassifier;
 use firefox::FirefoxClassifier;
 use java::JavaClassifier;
+use node::NodeClassifier;
+use python::PythonClassifier;
 
 /// The runtime family a process belongs to — its intrinsic "platform", detected
 /// by the classifier and carried as a plain process attribute (alongside pid,
 /// memory, etc.). Consumers use it for presentation (icon selection) without
 /// re-running detection. `Other` is anything no family recognises.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Platform {
     Chrome,
     Firefox,
     Electron,
     Java,
+    Python,
+    Node,
     Other,
 }
 
@@ -117,6 +123,8 @@ const FAMILIES: &[&dyn Classifier] = &[
     &ChromiumClassifier,
     &FirefoxClassifier,
     &ElectronClassifier,
+    &PythonClassifier,
+    &NodeClassifier,
 ];
 
 fn family_for(exe: &str, argv: &[&str]) -> Option<&'static dyn Classifier> {
@@ -339,6 +347,20 @@ mod tests {
     #[test]
     fn non_browser_passes_through() {
         assert_eq!(friendly_name(&argv("/usr/bin/htop")), "/usr/bin/htop");
+    }
+
+    #[test]
+    fn python_and_node_are_runtimes() {
+        use super::{platform, Platform};
+        // Interpreters invoked by name are detected as their runtime…
+        assert_eq!(platform(&argv("/usr/bin/python3 train.py")), Platform::Python);
+        assert_eq!(platform(&argv("/usr/bin/node server.js")), Platform::Node);
+        // …without altering the label (still the plain command line).
+        assert_eq!(friendly_name(&argv("/usr/bin/python3 train.py")), "/usr/bin/python3 train.py");
+        assert_eq!(friendly_name(&argv("/usr/bin/node server.js")), "/usr/bin/node server.js");
+        // A compiled binary with an arbitrary name is NOT a runtime — you can't
+        // tell it's Rust/Go/etc. from the process, so it stays Other.
+        assert_eq!(platform(&argv("/home/me/.cargo/bin/ripgrep foo")), Platform::Other);
     }
 
     /// Grouping contract: every process in the same app must yield the same
