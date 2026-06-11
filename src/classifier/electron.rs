@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use super::apps::{app_by_bundle, app_by_exe};
 use super::chrome::ChromiumClassifier;
 use super::{outer_app_bundle, Classifier, Platform};
 
@@ -36,20 +37,14 @@ impl Classifier for ElectronClassifier {
 impl ElectronClassifier {
     fn is_electron(exe: &str, argv: &[&str]) -> bool {
         const INDICATORS: [&str; 3] = ["electron", "--ms-enable-electron", "--type="];
-        // Linux-style lowercase exe names.
-        const KNOWN: [&str; 9] = [
-            "code", "codium", "slack", "discord", "signal-desktop", "obsidian", "spotify",
-            "teams", "cursor",
-        ];
-        if KNOWN.contains(&exe) {
+        // A known Linux exe basename is conclusive on its own.
+        if app_by_exe(exe).is_some() {
             return true;
         }
-        // macOS: `.app` bundles named in `KNOWN_BUNDLES` (or anything that
-        // looks Electron-shaped — its main exe is named `Electron` or sits
-        // under a `<App>.app` *and* the cmdline carries Chromium switches).
+        // macOS: a known `.app` bundle on the path is likewise conclusive.
         if let Some(first) = argv.first()
             && let Some(bundle) = outer_app_bundle(first)
-            && Self::known_bundle(&bundle).is_some()
+            && app_by_bundle(&bundle).is_some()
         {
             return true;
         }
@@ -60,50 +55,19 @@ impl ElectronClassifier {
 
     /// The app name from a known runtime exe, an `app.asar` path, or — on
     /// macOS — the outermost `.app` bundle. `None` for generic children with
-    /// no identity of their own (they inherit).
+    /// no identity of their own (they inherit). Known exes/bundles resolve via
+    /// the central app registry; the `.asar` path is structural and handled here.
     fn app(exe: &str, argv: &[&str]) -> Option<String> {
-        if let Some(name) = Self::known_lowercase_exe(exe) {
-            return Some(name.to_string());
+        if let Some(id) = app_by_exe(exe) {
+            return Some(id.name().to_string());
         }
         if let Some(first) = argv.first()
             && let Some(bundle) = outer_app_bundle(first)
-            && let Some(name) = Self::known_bundle(&bundle)
+            && let Some(id) = app_by_bundle(&bundle)
         {
-            return Some(name.to_string());
+            return Some(id.name().to_string());
         }
         Self::app_from_asar(argv)
-    }
-
-    fn known_lowercase_exe(exe: &str) -> Option<&'static str> {
-        Some(match exe {
-            "code" | "codium" => "VS Code",
-            "slack" => "Slack",
-            "discord" | "Discord" => "Discord",
-            "signal-desktop" => "Signal",
-            "obsidian" => "Obsidian",
-            "spotify" => "Spotify",
-            "teams" => "Teams",
-            "cursor" => "Cursor",
-            _ => return None,
-        })
-    }
-
-    /// macOS app-bundle names. Electron-app bundles use the human-readable
-    /// app name (often with a space — "Visual Studio Code.app", "Microsoft
-    /// Teams.app") so we map to the same display labels the Linux exes use.
-    fn known_bundle(bundle: &str) -> Option<&'static str> {
-        Some(match bundle {
-            "Visual Studio Code" | "Code" | "Code - Insiders" | "VSCodium" => "VS Code",
-            "Slack" => "Slack",
-            "Discord" => "Discord",
-            "Signal" => "Signal",
-            "Obsidian" => "Obsidian",
-            "Spotify" => "Spotify",
-            "Microsoft Teams" | "Microsoft Teams (work or school)" => "Teams",
-            "Cursor" => "Cursor",
-            "Bitwarden" => "Bitwarden",
-            _ => return None,
-        })
     }
 
     /// Shared-runtime apps (e.g. Arch's electron37) launch as

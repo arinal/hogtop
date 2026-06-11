@@ -1,11 +1,14 @@
 use std::path::Path;
 
+mod apps;
 mod chrome;
 mod electron;
 mod firefox;
 mod java;
 mod node;
 mod python;
+
+pub use apps::AppId;
 
 use chrome::ChromiumClassifier;
 use electron::ElectronClassifier;
@@ -27,6 +30,15 @@ pub enum Platform {
     Python,
     Node,
     Other,
+}
+
+/// The recognised [`AppId`] for a resolved app/group `name`, or `None` when no
+/// registry row owns it. The name is the canonical app identity the sampler
+/// already resolves (own or inherited) — so the UI keys icons off this domain
+/// fact instead of fuzzy-matching the command line. Non-app group names like
+/// "Chrome"/"Firefox" return `None` (they're a [`Platform`], iconned that way).
+pub fn app_id(name: &str) -> Option<AppId> {
+    apps::app_by_name(name)
 }
 
 /// The [`Platform`] this argv belongs to, or [`Platform::Other`] if no family

@@ -35,6 +35,11 @@ pub(super) struct Palette {
     pub text: Color,
     /// Empty (unfilled) meter cells: a low-contrast tint of the background.
     pub meter_empty: Color,
+    /// Background fill for the grouped `N×` count badge, so it reads as a chip
+    /// rather than loose text.
+    pub badge_bg: Color,
+    /// Foreground for text sitting on `badge_bg`, chosen to contrast it.
+    pub badge_fg: Color,
 }
 
 impl Palette {
@@ -48,12 +53,16 @@ impl Palette {
                 bg,
                 text: Color::Rgb(0x30, 0x30, 0x30),
                 meter_empty: Color::Rgb(0xc8, 0xc8, 0xc8),
+                badge_bg: Color::Rgb(0x4a, 0x7a, 0xb5),
+                badge_fg: Color::Rgb(0xf5, 0xf5, 0xf5),
             }
         } else {
             Self {
                 bg,
                 text: Color::Rgb(0xcc, 0xcc, 0xcc),
                 meter_empty: Color::Rgb(0x3c, 0x3c, 0x3c),
+                badge_bg: Color::Rgb(0x3a, 0x6e, 0xa5),
+                badge_fg: Color::Rgb(0xf5, 0xf5, 0xf5),
             }
         }
     }

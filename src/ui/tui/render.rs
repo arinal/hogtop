@@ -14,9 +14,9 @@ use super::theme::{
     METER_FULL_PCT, METER_WIDTH,
 };
 use crate::app::{App, SortBy};
-use crate::ui::{badges, pid_cell};
+use crate::ui::{badges, grouped_badge, pid_cell, IconSet};
 
-pub(super) fn render(f: &mut Frame, app: &App, nerd_font: bool, palette: Palette) {
+pub(super) fn render(f: &mut Frame, app: &App, icons: &dyn IconSet, palette: Palette) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -27,7 +27,7 @@ pub(super) fn render(f: &mut Frame, app: &App, nerd_font: bool, palette: Palette
         .split(f.area());
 
     render_header(f, app, chunks[0], palette);
-    render_table(f, app, chunks[1], nerd_font, palette);
+    render_table(f, app, chunks[1], icons, palette);
     render_status(f, app, chunks[2]);
 }
 
@@ -93,7 +93,7 @@ fn render_header(f: &mut Frame, app: &App, area: Rect, pal: Palette) {
     f.render_widget(Paragraph::new(Line::from(counts)).alignment(Alignment::Right), cols[1]);
 }
 
-fn render_table(f: &mut Frame, app: &App, area: Rect, nerd_font: bool, pal: Palette) {
+fn render_table(f: &mut Frame, app: &App, area: Rect, icons: &dyn IconSet, pal: Palette) {
     let ranked = app.rank_top(app.top_n());
     let selected = app.selected().min(ranked.len().saturating_sub(1));
 
@@ -130,19 +130,39 @@ fn render_table(f: &mut Frame, app: &App, area: Rect, nerd_font: bool, pal: Pale
                     amount,
                 )
             };
-            // Badge strip (platform · identity · grouped), then the label — one
-            // styled span so the badges fade and invert with the rest of the row.
-            let mut cmd = badges(r, nerd_font).join(" ");
-            if !cmd.is_empty() {
-                cmd.push(' ');
+            // Badge strip then the label, built as separate spans so the
+            // grouped `N×` count can wear a background and read as a chip while
+            // the rest of the row still fades/inverts uniformly.
+            let mut spans: Vec<Span> = Vec::new();
+            let leading = badges(r, icons).join(" ");
+            if !leading.is_empty() {
+                spans.push(Span::styled(format!("{leading} "), text_style));
             }
-            cmd.push_str(&r.label);
+            if let Some(count) = grouped_badge(r) {
+                let body = Style::default()
+                    .fg(fade(pal.badge_fg, amount, pal.bg))
+                    .bg(fade(pal.badge_bg, amount, pal.bg));
+                match icons.badge_caps() {
+                    // Nerd Font: round the chip with powerline half-circles,
+                    // drawn in the chip color over the row background.
+                    Some((left, right)) => {
+                        let cap = Style::default().fg(fade(pal.badge_bg, amount, pal.bg));
+                        spans.push(Span::styled(left.to_string(), cap));
+                        spans.push(Span::styled(count, body));
+                        spans.push(Span::styled(right.to_string(), cap));
+                    }
+                    // Emoji: no half-circles, so pad into a square block chip.
+                    None => spans.push(Span::styled(format!(" {count} "), body)),
+                }
+                spans.push(Span::styled(" ", text_style));
+            }
+            spans.push(Span::styled(r.label.clone(), text_style));
             Row::new(vec![
                 Cell::from(Span::styled(pid_cell(r), text_style)),
                 Cell::from(Line::from(meter_spans(load_frac, METER_WIDTH, meter_fade, pal))),
                 Cell::from(Span::styled(format!("{:>5.1}", r.cpu_pct), cpu_style)),
                 Cell::from(Span::styled(format!("{:>6} MB", mem_mb), text_style)),
-                Cell::from(Span::styled(cmd, text_style)),
+                Cell::from(Line::from(spans)),
             ])
             .style(row_style)
         })

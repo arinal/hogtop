@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokio::sync::mpsc;
 
-use crate::classifier::{self, Platform};
+use crate::classifier::{self, AppId, Platform};
 
 const CHANNEL_CAPACITY: usize = 8;
 
@@ -31,6 +31,11 @@ pub struct ProcSnapshot {
     pub group: Option<String>,
     /// The process's runtime family.
     pub platform: Platform,
+    /// The recognised app this process belongs to, if any — a domain fact the
+    /// UI keys icons off. Derived from the resolved `group` identity, so it's
+    /// set for every process of a known app (grouped or per-process), and
+    /// `None` for Chrome/Firefox/unrecognised procs.
+    pub app: Option<AppId>,
 }
 
 /// Synchronous sampling primitive: holds the stateful sysinfo `System` and
@@ -154,6 +159,11 @@ impl Sampler {
                 } else {
                     None
                 };
+                // The recognised-app fact, keyed off the resolved identity, so a
+                // known app's icon shows on every one of its rows (grouped or
+                // per-process). `None` for Chrome/Firefox (their group name is a
+                // platform, not a registry app) and unrecognised procs.
+                let app = group.as_deref().and_then(classifier::app_id);
                 let cmd = if proc.app.is_some() {
                     classifier::friendly_name(&argv)
                 } else if let Some(app) = &inherited {
@@ -169,6 +179,7 @@ impl Sampler {
                     memory_bytes: proc.memory_bytes,
                     group,
                     platform: classifier::platform(&argv),
+                    app,
                 }
             })
             .collect();

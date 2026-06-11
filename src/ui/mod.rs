@@ -1,13 +1,17 @@
+mod icons;
 mod plain;
 mod tui;
 
 use anyhow::Result;
 
 use crate::app::{App, Row as AppRow};
-use crate::classifier::Platform;
+use crate::classifier::{AppId, Platform};
 
+pub use icons::Glyphs;
 pub use plain::PlainRenderer;
 pub use tui::{map_key, TuiRenderer};
+
+use icons::grouped_badge;
 
 /// Port (algebra) for presenting `App` state. Each interpreter owns its sink.
 pub trait Renderer {
@@ -20,6 +24,29 @@ pub trait Renderer {
     }
 }
 
+/// Port (algebra) for mapping domain facts to display glyphs. The renderers
+/// depend on this trait; the concrete [`Glyphs`] infra (the emoji/Nerd-Font
+/// table) is injected at construction, the same way [`Nix`](crate::control::Nix)
+/// is injected for process control. Keeping the codepoints behind the port is
+/// what stops presentation knowledge leaking back across the onion seam.
+pub trait IconSet {
+    /// Glyph for a runtime [`Platform`], or `None` for [`Platform::Other`].
+    fn platform(&self, platform: Platform) -> Option<&'static str>;
+
+    /// Glyph for a recognised [`AppId`] — keyed off the domain fact, not a
+    /// command-line substring.
+    fn app(&self, app: AppId) -> Option<&'static str>;
+
+    /// Glyph for a tool identified only by a `label` keyword (compiled binaries
+    /// with no [`AppId`]/[`Platform`] signal), or `None`.
+    fn tool(&self, label: &str) -> Option<&'static str>;
+
+    /// Rounded `(left, right)` cap glyphs that bracket a filled badge into a
+    /// pill, or `None` when the set has no shape for it (emoji terminals lack
+    /// the powerline half-circles, so they fall back to a plain block chip).
+    fn badge_caps(&self) -> Option<(&'static str, &'static str)>;
+}
+
 /// The PID column: the process's pid, or — for a group — the leader pid, the
 /// minimum pid in the group (a stable proxy for the oldest/main process). The
 /// group's proc count now rides in the [`grouped_badge`], not here.
@@ -28,16 +55,26 @@ fn pid_cell(row: &AppRow) -> String {
 }
 
 /// The badges shown before a row's label, collected in order
-/// `platform · identity · grouped` and deduped by glyph. Each source is an
-/// independent resolver returning an optional badge; adding a new fact (e.g.
-/// `root`) is just one more producer here. Deduping is a safety net for when two
-/// resolvers land on the same glyph — after the platform/identity split they no
-/// longer overlap, but a future producer might.
-fn badges(row: &AppRow, nerd_font: bool) -> Vec<String> {
+/// `platform · identity` and deduped by glyph. The grouped `N×` count is *not*
+/// included here — it's produced by [`grouped_badge`] so renderers can style it
+/// distinctly (e.g. the TUI gives it a background to read as a true badge).
+/// Each source is an independent resolver returning an optional badge; adding a
+/// new fact (e.g. `root`) is just one more producer here. Deduping is a safety
+/// net for when two resolvers land on the same glyph — after the
+/// platform/identity split they no longer overlap, but a future producer might.
+///
+/// Arrangement (order + dedupe) lives here, at the shared UI level; only the
+/// fact→glyph lookup is delegated to the injected [`IconSet`]. The identity slot
+/// prefers the [`AppId`] domain fact and falls back to the label-keyword
+/// [`IconSet::tool`] heuristic only when the row is no recognised app.
+fn badges(row: &AppRow, icons: &dyn IconSet) -> Vec<String> {
+    let identity = match row.app {
+        Some(app) => icons.app(app),
+        None => icons.tool(&row.label),
+    };
     let candidates = [
-        platform_badge(row.platform, nerd_font).map(str::to_string),
-        icon_for(&row.label, nerd_font).map(str::to_string),
-        grouped_badge(row),
+        icons.platform(row.platform).map(str::to_string),
+        identity.map(str::to_string),
     ];
     let mut out: Vec<String> = Vec::new();
     for badge in candidates.into_iter().flatten() {
@@ -48,91 +85,14 @@ fn badges(row: &AppRow, nerd_font: bool) -> Vec<String> {
     out
 }
 
-/// Identity badge: a glyph for a *specific* app or tool, matched on the display
-/// name, or `None` when nothing matches. Runtime families that the [`Platform`]
-/// enum already models (`java`, `python`, `node`, `chrome`, `firefox`) are NOT
-/// matched here — they come from [`platform_badge`]. Languages whose compiled
-/// binaries are undetectable as a family (`rust`, `go`, `ruby`) stay here,
-/// matched on their toolchain names. With `nerd_font`, returns a Nerd Font glyph
-/// instead of the emoji; those codepoints assume a v3 patched font (the `nf-`
-/// names are in the Nerd Fonts cheat sheet, https://www.nerdfonts.com/cheat-sheet).
-fn icon_for(name: &str, nerd_font: bool) -> Option<&'static str> {
-    let l = name.to_ascii_lowercase();
-    let l = l.as_str();
-    // Match the toolchain, not a bare "rust" — labels can be full paths, and a
-    // process living under a `…/rust/…` directory is not a Rust program.
-    if l.contains("cargo") || l.contains("rustc") {
-        return Some(if nerd_font { "\u{e7a8}" } else { "🦀" }); // nf-dev-rust
-    }
-    if l.contains("go") && (l == "go" || l.contains("go build") || l.contains("gopls")) {
-        return Some(if nerd_font { "\u{e724}" } else { "🔵" }); // nf-dev-go
-    }
-    if l.contains("ruby") || l.contains("irb") || l.contains("rails") || l.contains("bundle") {
-        return Some(if nerd_font { "\u{e739}" } else { "💎" }); // nf-dev-ruby
-    }
-    if l == "code" || l == "codium" || l.contains("vs code") || l == "cursor" {
-        return Some(if nerd_font { "\u{e70c}" } else { "💻" }); // nf-dev-visualstudio
-    }
-    if l.contains("vim") {
-        // Catches vim, nvim, neovim, gvim — "vim" is a substring of them all.
-        return Some(if nerd_font { "\u{e62b}" } else { "📝" }); // nf-custom-vim
-    }
-    if l.contains("docker") || l.contains("containerd") || l.contains("podman") {
-        return Some(if nerd_font { "\u{e7b0}" } else { "🐳" }); // nf-dev-docker
-    }
-    if l.contains("slack") {
-        return Some(if nerd_font { "\u{f198}" } else { "💬" }); // nf-fa-slack
-    }
-    if l.contains("discord") {
-        return Some(if nerd_font { "\u{f11b}" } else { "🎮" }); // nf-fa-gamepad
-    }
-    if l.contains("spotify") {
-        return Some(if nerd_font { "\u{f1bc}" } else { "🎵" }); // nf-fa-spotify
-    }
-    if l.contains("bitwarden") {
-        return Some(if nerd_font { "\u{f023}" } else { "🔐" }); // nf-fa-lock
-    }
-    if l.contains("obsidian") {
-        return Some(if nerd_font { "\u{e26e}" } else { "🟣" }); // nf-md-language_markdown
-    }
-    if l.contains("signal") {
-        return Some(if nerd_font { "\u{f0f3}" } else { "💬" }); // nf-fa-bell
-    }
-    if l.contains("teams") {
-        return Some(if nerd_font { "\u{f0871}" } else { "👥" }); // nf-md-microsoft_teams
-    }
-    None
-}
-
-/// Platform badge: a glyph for the row's runtime family, straight from the
-/// [`Platform`] fact. `None` for [`Platform::Other`] (nothing to say). The
-/// Electron `⚛` originates here — it is no longer an [`icon_for`] fallback.
-fn platform_badge(platform: Platform, nerd_font: bool) -> Option<&'static str> {
-    Some(match platform {
-        Platform::Java => if nerd_font { "\u{e738}" } else { "☕" }, // nf-dev-java
-        Platform::Python => if nerd_font { "\u{e73c}" } else { "🐍" }, // nf-dev-python
-        Platform::Node => if nerd_font { "\u{e718}" } else { "🟢" }, // nf-dev-nodejs_small
-        Platform::Chrome => if nerd_font { "\u{e743}" } else { "🌐" }, // nf-dev-chrome
-        Platform::Firefox => if nerd_font { "\u{e745}" } else { "🦊" }, // nf-dev-firefox
-        Platform::Electron => if nerd_font { "\u{f5d2}" } else { "⚛" }, // nf-fa-atom
-        Platform::Other => return None,
-    })
-}
-
-/// Grouped badge: an `N×` count for an aggregated row, `None` for a single
-/// process. The count lives here now — the PID column shows the leader pid.
-fn grouped_badge(row: &AppRow) -> Option<String> {
-    row.is_group.then(|| format!("{}×", row.pids.len()))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{badges, grouped_badge, icon_for, pid_cell, platform_badge};
+    use super::{badges, pid_cell, Glyphs};
     use crate::app::Row;
-    use crate::classifier::Platform;
+    use crate::classifier::{AppId, Platform};
     use sysinfo::Pid;
 
-    fn row(label: &str, platform: Platform, pids: &[usize], is_group: bool) -> Row {
+    fn row(label: &str, platform: Platform, app: Option<AppId>, pids: &[usize], is_group: bool) -> Row {
         Row {
             label: label.to_string(),
             exe: String::new(),
@@ -142,58 +102,51 @@ mod tests {
             is_group,
             is_new: false,
             platform,
+            app,
         }
     }
 
     #[test]
-    fn identity_matches_specific_apps_only() {
-        assert_eq!(icon_for("Slack", false), Some("💬"));
-        assert_eq!(icon_for("cargo build", false), Some("🦀"));
-        // Families the Platform enum owns are NOT identity matches anymore.
-        assert_eq!(icon_for("python3", false), None);
-        assert_eq!(icon_for("chrome", false), None);
-        assert_eq!(icon_for("some random process", false), None);
-    }
-
-    #[test]
-    fn platform_badge_maps_known_families() {
-        assert_eq!(platform_badge(Platform::Java, false), Some("☕"));
-        assert_eq!(platform_badge(Platform::Python, false), Some("🐍"));
-        assert_eq!(platform_badge(Platform::Node, false), Some("🟢"));
-        assert_eq!(platform_badge(Platform::Electron, false), Some("⚛"));
-        assert_eq!(platform_badge(Platform::Other, false), None);
-    }
-
-    #[test]
-    fn grouped_badge_counts_only_groups() {
-        assert_eq!(
-            grouped_badge(&row("x", Platform::Other, &[1, 2, 3], true)).as_deref(),
-            Some("3×")
-        );
-        assert_eq!(grouped_badge(&row("x", Platform::Other, &[1], false)), None);
-    }
-
-    #[test]
     fn badges_collected_in_order() {
-        // Electron app, grouped: platform · identity · grouped.
+        let icons = Glyphs::new(false);
+        // Electron app: platform · identity. Identity comes from the AppId fact
+        // (Slack), not the label. The grouped count is no longer a badge here.
         assert_eq!(
-            badges(&row("Slack", Platform::Electron, &[12, 10, 11], true), false),
-            vec!["⚛".to_string(), "💬".to_string(), "3×".to_string()]
+            badges(&row("Slack", Platform::Electron, Some(AppId::Slack), &[12, 10, 11], true), &icons),
+            vec!["⚛".to_string(), "💬".to_string()]
         );
         // No recognized facts → no badges (no padding).
-        assert!(badges(&row("htop", Platform::Other, &[5], false), false).is_empty());
+        assert!(badges(&row("htop", Platform::Other, None, &[5], false), &icons).is_empty());
         // A Python process: platform badge only.
         assert_eq!(
-            badges(&row("/usr/bin/python3 x.py", Platform::Python, &[5], false), false),
+            badges(&row("/usr/bin/python3 x.py", Platform::Python, None, &[5], false), &icons),
             vec!["🐍".to_string()]
         );
+    }
+
+    #[test]
+    fn identity_prefers_app_fact_then_falls_back_to_tool() {
+        let icons = Glyphs::new(false);
+        // A recognised app uses its AppId glyph, ignoring the label entirely.
+        assert_eq!(
+            badges(&row("anything at all", Platform::Electron, Some(AppId::Spotify), &[1], false), &icons),
+            vec!["⚛".to_string(), "🎵".to_string()]
+        );
+        // No app fact → fall back to the label-keyword tool heuristic.
+        assert_eq!(
+            badges(&row("cargo build", Platform::Other, None, &[1], false), &icons),
+            vec!["🦀".to_string()]
+        );
+        // No app fact and no tool keyword → nothing.
+        assert!(badges(&row("htop", Platform::Other, None, &[1], false), &icons).is_empty());
     }
 
     #[test]
     fn badges_are_unique() {
         // Dedupe guarantee: a row never shows the same glyph twice. Identity and
         // platform altitudes are disjoint today, so this is a safety net.
-        let b = badges(&row("Spark", Platform::Java, &[1, 2], true), false);
+        let icons = Glyphs::new(false);
+        let b = badges(&row("Spark", Platform::Java, None, &[1, 2], true), &icons);
         let mut deduped = b.clone();
         deduped.sort();
         deduped.dedup();
@@ -203,8 +156,8 @@ mod tests {
     #[test]
     fn pid_cell_shows_leader_pid_for_group() {
         // Group: the minimum pid, regardless of insertion order.
-        assert_eq!(pid_cell(&row("Chrome", Platform::Chrome, &[4200, 4127, 4300], true)), "4127");
+        assert_eq!(pid_cell(&row("Chrome", Platform::Chrome, None, &[4200, 4127, 4300], true)), "4127");
         // Single process: its own pid.
-        assert_eq!(pid_cell(&row("htop", Platform::Other, &[8891], false)), "8891");
+        assert_eq!(pid_cell(&row("htop", Platform::Other, None, &[8891], false)), "8891");
     }
 }

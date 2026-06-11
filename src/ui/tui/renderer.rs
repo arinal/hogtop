@@ -14,7 +14,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use super::render::render;
 use super::theme::Palette;
 use crate::app::App;
-use crate::ui::Renderer;
+use crate::ui::{Glyphs, Renderer};
 
 type TuiBackend = CrosstermBackend<Stdout>;
 
@@ -23,7 +23,7 @@ type TuiBackend = CrosstermBackend<Stdout>;
 /// terminal plumbing.
 pub struct TuiRenderer {
     terminal: Terminal<TuiBackend>,
-    nerd_font: bool,
+    icons: Glyphs,
     palette: Palette,
 }
 
@@ -42,15 +42,15 @@ impl TuiRenderer {
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
-        Ok(Self { terminal, nerd_font, palette })
+        Ok(Self { terminal, icons: Glyphs::new(nerd_font), palette })
     }
 }
 
 impl Renderer for TuiRenderer {
     fn present(&mut self, app: &App) -> Result<()> {
-        let nerd_font = self.nerd_font;
+        let icons = &self.icons;
         let palette = self.palette;
-        self.terminal.draw(|f| render(f, app, nerd_font, palette))?;
+        self.terminal.draw(|f| render(f, app, icons, palette))?;
         Ok(())
     }
 

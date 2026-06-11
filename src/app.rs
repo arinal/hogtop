@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use nix::sys::signal::Signal;
 use sysinfo::Pid;
 
-use crate::classifier::Platform;
+use crate::classifier::{AppId, Platform};
 use crate::control::ProcessController;
 use crate::sampler::{Sampler, Snapshot};
 
@@ -17,6 +17,7 @@ pub struct ProcState {
     pub exe: String,
     pub group: Option<String>,
     pub platform: Platform,
+    pub app: Option<AppId>,
     pub baseline_cpu_ms: u64,
     pub baseline_at: Instant,
     pub last_cpu_ms: u64,
@@ -64,6 +65,7 @@ pub struct Row {
     pub is_group: bool,
     pub is_new: bool,
     pub platform: Platform,
+    pub app: Option<AppId>,
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +220,7 @@ impl App {
                     memory_sum_bytes: p.memory_bytes as u128,
                     memory_samples: 1,
                     is_new: !is_initial,
+                    app: p.app,
                 });
         }
     }
@@ -318,6 +321,7 @@ impl App {
                         is_group: true,
                         is_new: false,
                         platform: p.platform,
+                        app: p.app,
                     });
                     row.cpu_pct += cpu_pct;
                     row.avg_memory_bytes += mem;
@@ -333,6 +337,7 @@ impl App {
                     is_group: false,
                     is_new: p.is_new,
                     platform: p.platform,
+                    app: p.app,
                 }),
             }
         }
@@ -468,6 +473,7 @@ mod tests {
                 memory_bytes: 0,
                 group: None,
                 platform: Platform::Other,
+                app: None,
             }],
         };
         let mut app = App::new();
@@ -545,6 +551,7 @@ mod tests {
                     } else {
                         Platform::Other
                     },
+                    app: group.and_then(crate::classifier::app_id),
                 })
                 .collect(),
         };
