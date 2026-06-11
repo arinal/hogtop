@@ -29,7 +29,7 @@ impl<W: Write> Renderer for PlainRenderer<W> {
 fn render_plain(app: &App, top: usize, icons: &dyn IconSet) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "hogtop — window: {}s · {} procs · sort: {}\n",
+        "toph — window: {}s · {} procs · sort: {}\n",
         app.window_elapsed().as_secs(),
         app.proc_count(),
         app.sort_by().label(),

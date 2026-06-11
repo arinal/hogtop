@@ -602,21 +602,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hogtop"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "crossterm 0.29.0",
- "futures-util",
- "nix 0.31.3",
- "ratatui",
- "sysinfo",
- "termbg",
- "tokio",
-]
-
-[[package]]
 name = "id-arena"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1742,6 +1727,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "toph"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm 0.29.0",
+ "futures-util",
+ "nix 0.31.3",
+ "ratatui",
+ "sysinfo",
+ "termbg",
+ "tokio",
 ]
 
 [[package]]

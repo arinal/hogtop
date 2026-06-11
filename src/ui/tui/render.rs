@@ -57,7 +57,7 @@ fn render_header(f: &mut Frame, app: &App, area: Rect, pal: Palette) {
     // Labels are lowercase so the red mnemonic reads as the literal (lowercase)
     // key — "grouped" hints `g`, not Shift+G.
     let check = if app.grouped() { "✓" } else { " " };
-    let mut status = vec![Span::raw(" hogtop     ")];
+    let mut status = vec![Span::raw(" toph       ")];
     status.extend(keyed("sort"));
     status.push(Span::raw(format!(": {}   ", app.sort_by().label())));
     status.extend(keyed("grouped"));
