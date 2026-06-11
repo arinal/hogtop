@@ -50,14 +50,14 @@ impl IconSet for Glyphs {
     /// [`Platform`] fact. `None` for [`Platform::Other`] (nothing to say).
     fn platform(&self, platform: Platform) -> Option<&'static str> {
         Some(self.pick(match platform {
-            Platform::Java => ("☕", "\u{e738}"),    // nf-dev-java
-            Platform::Python => ("🐍", "\u{e73c}"),  // nf-dev-python
-            Platform::Node => ("🟢", "\u{e718}"),    // nf-dev-nodejs_small
-            Platform::Chrome => ("🌐", "\u{e743}"),  // nf-dev-chrome
-            Platform::Firefox => ("🦊", "\u{e745}"), // nf-dev-firefox
-            Platform::Electron => ("⚛", "\u{f5d2}"), // nf-fa-atom
-            Platform::Shell => ("🐚", "\u{f489}"),   // nf-oct-terminal
-            Platform::Kernel => ("⚙", "\u{f013}"),   // nf-fa-cog
+            Platform::Java => ("☕", ""),    // nf-dev-java
+            Platform::Python => ("🐍", ""),  // nf-dev-python
+            Platform::Node => ("🟢", ""),    // nf-dev-nodejs_small
+            Platform::Chrome => ("🌐", ""),  // nf-dev-chrome
+            Platform::Firefox => ("🦊", ""), // nf-dev-firefox
+            Platform::Electron => ("⚛", ""), // nf-fa-atom
+            Platform::Shell => ("🐚", ""),   // nf-oct-terminal
+            Platform::Kernel => ("⚙", ""),   // nf-fa-cog
             Platform::Other => return None,
         }))
     }
@@ -67,16 +67,16 @@ impl IconSet for Glyphs {
     /// new [`AppId`] variant without a glyph here is a compile error.
     fn app(&self, app: AppId) -> Option<&'static str> {
         Some(self.pick(match app {
-            AppId::VsCode => ("💻", "\u{e70c}"),    // nf-dev-visualstudio
-            AppId::Cursor => ("💻", "\u{e70c}"),    // nf-dev-visualstudio
-            AppId::Slack => ("💬", "\u{f198}"),     // nf-fa-slack
-            AppId::Discord => ("🎮", "\u{f11b}"),   // nf-fa-gamepad
-            AppId::Signal => ("💬", "\u{f0f3}"),    // nf-fa-bell
-            AppId::Obsidian => ("🟣", "\u{e26e}"),  // nf-md-language_markdown
-            AppId::Spotify => ("🎵", "\u{f1bc}"),   // nf-fa-spotify
-            AppId::Teams => ("👥", "\u{f0871}"),    // nf-md-microsoft_teams
-            AppId::Bitwarden => ("🔐", "\u{f023}"), // nf-fa-lock
-            AppId::Claude => ("✳", "\u{f069}"),     // nf-fa-asterisk (Claude's sunburst)
+            AppId::VsCode => ("💻", ""),    // nf-dev-visualstudio
+            AppId::Cursor => ("💻", ""),    // nf-dev-visualstudio
+            AppId::Slack => ("💬", ""),     // nf-fa-slack
+            AppId::Discord => ("🎮", ""),   // nf-fa-gamepad
+            AppId::Signal => ("💬", ""),    // nf-fa-bell
+            AppId::Obsidian => ("🟣", ""),  // nf-md-language_markdown
+            AppId::Spotify => ("🎵", ""),   // nf-fa-spotify
+            AppId::Teams => ("👥", "󰡱"),    // nf-md-microsoft_teams
+            AppId::Bitwarden => ("🔐", ""), // nf-fa-lock
+            AppId::Claude => ("✳", ""),     // nf-fa-asterisk (Claude's sunburst)
         }))
     }
 
@@ -91,19 +91,19 @@ impl IconSet for Glyphs {
         // Match the toolchain, not a bare "rust" — labels can be full paths, and
         // a process under a `…/rust/…` directory is not a Rust program.
         let glyphs = if l.contains("cargo") || l.contains("rustc") {
-            ("🦀", "\u{e7a8}") // nf-dev-rust
+            ("🦀", "") // nf-dev-rust
         } else if l.contains("go") && (l == "go" || l.contains("go build") || l.contains("gopls")) {
-            ("🔵", "\u{e724}") // nf-dev-go
+            ("🔵", "") // nf-dev-go
         } else if l.contains("ruby") || l.contains("irb") || l.contains("rails") || l.contains("bundle") {
-            ("💎", "\u{e739}") // nf-dev-ruby
+            ("💎", "") // nf-dev-ruby
         } else if l.contains("vim") {
             // Catches vim, nvim, neovim, gvim — "vim" is a substring of them all.
-            ("📝", "\u{e62b}") // nf-custom-vim
+            ("📝", "") // nf-custom-vim
         } else if l.contains("docker") || l.contains("containerd") || l.contains("podman") {
-            ("🐳", "\u{e7b0}") // nf-dev-docker
+            ("🐳", "") // nf-dev-docker
         } else if l.contains("claude") {
             // The `claude` CLI (Claude Code) — a Node tool, not the desktop app.
-            ("✳", "\u{f069}") // nf-fa-asterisk (Claude's sunburst)
+            ("✳", "") // nf-fa-asterisk (Claude's sunburst)
         } else {
             return None;
         };
@@ -112,12 +112,12 @@ impl IconSet for Glyphs {
 
     /// Powerline half-circles that round a filled badge into a pill, but only
     /// for Nerd Font; emoji terminals have no such glyphs, so they get a square
-    /// block chip instead. `\u{e0b6}` is the left solid half-circle (nf-pl) and
-    /// `\u{e0b4}` the right — drawn in the chip color over the row background,
+    /// block chip instead. `` is the left solid half-circle (nf-pl) and
+    /// `` the right — drawn in the chip color over the row background,
     /// they cap the filled body with rounded ends.
     fn badge_caps(&self) -> Option<(&'static str, &'static str)> {
         match self.style {
-            GlyphStyle::NerdFont => Some(("\u{e0b6}", "\u{e0b4}")),
+            GlyphStyle::NerdFont => Some(("", "")),
             GlyphStyle::Emoji => None,
         }
     }
@@ -173,13 +173,13 @@ mod tests {
         let nerd = Glyphs::new(true);
         // Same fact, different column — and never the same string.
         assert_ne!(emoji.app(AppId::Slack), nerd.app(AppId::Slack));
-        assert_eq!(nerd.app(AppId::Slack), Some("\u{f198}"));
+        assert_eq!(nerd.app(AppId::Slack), Some(""));
     }
 
     #[test]
     fn badge_caps_only_for_nerd_font() {
         // Powerline half-circles round the chip — but only Nerd Font has them.
-        assert_eq!(Glyphs::new(true).badge_caps(), Some(("\u{e0b6}", "\u{e0b4}")));
+        assert_eq!(Glyphs::new(true).badge_caps(), Some(("", "")));
         assert_eq!(Glyphs::new(false).badge_caps(), None);
     }
 }
