@@ -1,5 +1,5 @@
 [package]
-name = "toph"
+name = "tophog"
 version = "0.1.0"
 edition = "2024"
 description = "An interactive TUI that ranks CPU/memory-hogging processes over a growing window and lets you kill them."
@@ -10,6 +10,10 @@ readme = "README.md"
 keywords = ["tui", "process", "monitor", "htop", "cpu"]
 categories = ["command-line-utilities"]
 include = ["/src/**", "/Cargo.toml", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
+
+[[bin]]
+name = "toph"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.102"

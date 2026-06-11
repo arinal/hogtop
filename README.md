@@ -42,7 +42,7 @@ with a constantly-reordering top window."
 ### From crates.io
 
 ```sh
-cargo install toph
+cargo install tophog      # the crate is `tophog`; it installs a `toph` command
 ```
 
 ### From source
