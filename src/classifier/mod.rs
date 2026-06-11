@@ -5,8 +5,10 @@ mod chrome;
 mod electron;
 mod firefox;
 mod java;
+mod kernel;
 mod node;
 mod python;
+mod shell;
 
 pub use apps::AppId;
 
@@ -14,8 +16,10 @@ use chrome::ChromiumClassifier;
 use electron::ElectronClassifier;
 use firefox::FirefoxClassifier;
 use java::JavaClassifier;
+use kernel::KernelClassifier;
 use node::NodeClassifier;
 use python::PythonClassifier;
+use shell::ShellClassifier;
 
 /// The runtime family a process belongs to — its intrinsic "platform", detected
 /// by the classifier and carried as a plain process attribute (alongside pid,
@@ -29,6 +33,8 @@ pub enum Platform {
     Java,
     Python,
     Node,
+    Shell,
+    Kernel,
     Other,
 }
 
@@ -128,15 +134,18 @@ pub(crate) trait Classifier {
     }
 }
 
-/// Families tried in order. Java is first so a JVM process whose args happen to
-/// contain Chromium-ish flags still reads as Java.
+/// Families tried in order. Kernel is first — its bracketed-comm check is cheap
+/// and conclusive, and a kernel thread is nothing else. Java is next so a JVM
+/// process whose args happen to contain Chromium-ish flags still reads as Java.
 const FAMILIES: &[&dyn Classifier] = &[
+    &KernelClassifier,
     &JavaClassifier,
     &ChromiumClassifier,
     &FirefoxClassifier,
     &ElectronClassifier,
     &PythonClassifier,
     &NodeClassifier,
+    &ShellClassifier,
 ];
 
 fn family_for(exe: &str, argv: &[&str]) -> Option<&'static dyn Classifier> {
@@ -373,6 +382,45 @@ mod tests {
         // A compiled binary with an arbitrary name is NOT a runtime — you can't
         // tell it's Rust/Go/etc. from the process, so it stays Other.
         assert_eq!(platform(&argv("/home/me/.cargo/bin/ripgrep foo")), Platform::Other);
+    }
+
+    #[test]
+    fn npm_rewritten_title_is_node() {
+        use super::{platform, Platform};
+        // npm/npx rewrite their title to one space-joined token; sysinfo can't
+        // split it, so argv[0] is the whole "npm exec …" string. Detect Node off
+        // its leading word anyway, and keep the label as-is.
+        assert_eq!(platform(&["npm exec @playwright/mcp@latest"]), Platform::Node);
+        assert_eq!(platform(&["npx playwright test"]), Platform::Node);
+        assert_eq!(
+            friendly_name(&["npm exec @playwright/mcp@latest"]),
+            "npm exec @playwright/mcp@latest"
+        );
+    }
+
+    #[test]
+    fn shells_are_runtimes() {
+        use super::{platform, Platform};
+        // Interactive shells and scripts both detect as the Shell runtime…
+        assert_eq!(platform(&argv("/bin/bash")), Platform::Shell);
+        assert_eq!(platform(&argv("/bin/sh -c make")), Platform::Shell);
+        assert_eq!(platform(&argv("/usr/bin/zsh deploy.sh")), Platform::Shell);
+        // Login shells arrive with a leading dash on argv[0].
+        assert_eq!(platform(&["-bash"]), Platform::Shell);
+        // …and the label is left as the plain command line.
+        assert_eq!(friendly_name(&argv("/bin/sh -c make")), "/bin/sh -c make");
+    }
+
+    #[test]
+    fn kernel_threads_are_detected_by_bracketed_comm() {
+        use super::{platform, Platform};
+        // The sampler surfaces kernel threads as their bracketed comm name.
+        assert_eq!(platform(&["[kthreadd]"]), Platform::Kernel);
+        // A `/` inside the name (kworker) must not fool the matcher.
+        assert_eq!(platform(&["[kworker/0:1]"]), Platform::Kernel);
+        assert_eq!(friendly_name(&["[rcu_sched]"]), "[rcu_sched]");
+        // A real bracket-free command is not kernel-owned.
+        assert_eq!(platform(&argv("/usr/bin/htop")), Platform::Other);
     }
 
     /// Grouping contract: every process in the same app must yield the same

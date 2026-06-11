@@ -65,6 +65,9 @@ known_apps! {
     Obsidian  => { name: "Obsidian",  exes: ["obsidian"],              bundles: ["Obsidian"] },
     Spotify   => { name: "Spotify",   exes: ["spotify"],               bundles: ["Spotify"] },
     Teams     => { name: "Teams",     exes: ["teams"],                 bundles: ["Microsoft Teams", "Microsoft Teams (work or school)"] },
+    // Claude Desktop. The `claude` CLI (Claude Code) is a Node tool, not this
+    // Electron app, so we key off the dedicated desktop exe / `.app` bundle.
+    Claude    => { name: "Claude",    exes: ["claude-desktop"],         bundles: ["Claude"] },
     // Bitwarden is only seen via its `app.asar` path / macOS bundle — no stable
     // top-level exe name — so it carries no `exes` entry.
     Bitwarden => { name: "Bitwarden", exes: [],                        bundles: ["Bitwarden"] },

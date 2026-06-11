@@ -56,6 +56,8 @@ impl IconSet for Glyphs {
             Platform::Chrome => ("🌐", "\u{e743}"),  // nf-dev-chrome
             Platform::Firefox => ("🦊", "\u{e745}"), // nf-dev-firefox
             Platform::Electron => ("⚛", "\u{f5d2}"), // nf-fa-atom
+            Platform::Shell => ("🐚", "\u{f489}"),   // nf-oct-terminal
+            Platform::Kernel => ("⚙", "\u{f013}"),   // nf-fa-cog
             Platform::Other => return None,
         }))
     }
@@ -74,6 +76,7 @@ impl IconSet for Glyphs {
             AppId::Spotify => ("🎵", "\u{f1bc}"),   // nf-fa-spotify
             AppId::Teams => ("👥", "\u{f0871}"),    // nf-md-microsoft_teams
             AppId::Bitwarden => ("🔐", "\u{f023}"), // nf-fa-lock
+            AppId::Claude => ("✳", "\u{f069}"),     // nf-fa-asterisk (Claude's sunburst)
         }))
     }
 
@@ -98,6 +101,9 @@ impl IconSet for Glyphs {
             ("📝", "\u{e62b}") // nf-custom-vim
         } else if l.contains("docker") || l.contains("containerd") || l.contains("podman") {
             ("🐳", "\u{e7b0}") // nf-dev-docker
+        } else if l.contains("claude") {
+            // The `claude` CLI (Claude Code) — a Node tool, not the desktop app.
+            ("✳", "\u{f069}") // nf-fa-asterisk (Claude's sunburst)
         } else {
             return None;
         };
@@ -135,6 +141,8 @@ mod tests {
         assert_eq!(g.platform(Platform::Java), Some("☕"));
         assert_eq!(g.platform(Platform::Python), Some("🐍"));
         assert_eq!(g.platform(Platform::Electron), Some("⚛"));
+        assert_eq!(g.platform(Platform::Shell), Some("🐚"));
+        assert_eq!(g.platform(Platform::Kernel), Some("⚙"));
         assert_eq!(g.platform(Platform::Other), None);
     }
 
@@ -144,6 +152,7 @@ mod tests {
         assert_eq!(g.app(AppId::Slack), Some("💬"));
         assert_eq!(g.app(AppId::Spotify), Some("🎵"));
         assert_eq!(g.app(AppId::VsCode), Some("💻"));
+        assert_eq!(g.app(AppId::Claude), Some("✳"));
     }
 
     #[test]
@@ -151,6 +160,8 @@ mod tests {
         let g = Glyphs::new(false);
         assert_eq!(g.tool("cargo build"), Some("🦀"));
         assert_eq!(g.tool("nvim foo.rs"), Some("📝"));
+        // The `claude` CLI (Claude Code) is a Node tool, iconned by keyword.
+        assert_eq!(g.tool("node /usr/bin/claude"), Some("✳"));
         // Runtimes the Platform enum owns are NOT tool matches.
         assert_eq!(g.tool("python3"), None);
         assert_eq!(g.tool("some random process"), None);
