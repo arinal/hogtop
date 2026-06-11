@@ -1,12 +1,12 @@
 //! The interactive interpreter: owns the terminal and its raw-mode/alternate-
 //! screen lifecycle, and drives a frame per `present`.
 
-use std::io::{self, Stdout, Write};
+use std::io::{self, IsTerminal, Stdout, Write};
 use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::{
-    execute,
+    cursor, execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -28,7 +28,10 @@ pub struct TuiRenderer {
 }
 
 impl TuiRenderer {
-    pub fn new(nerd_font: bool) -> Result<Self> {
+    /// `nerd_font`: `Some(true/false)` is an explicit choice (CLI flag or env);
+    /// `None` means "auto-detect" — we probe the terminal and fall back to emoji
+    /// when the answer is inconclusive.
+    pub fn new(nerd_font: Option<bool>) -> Result<Self> {
         // Ask the terminal for its background color before we take over the
         // screen, so the distance fade can blend toward the real bg (light or
         // dark). If the terminal doesn't answer (e.g. piped, or unsupported),
@@ -41,8 +44,44 @@ impl TuiRenderer {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
+        // Resolve auto-detect on the alternate screen, so the probe glyph is
+        // never visible — the first frame paints over it.
+        let nerd = nerd_font.unwrap_or_else(|| probe_nerd_font().unwrap_or(false));
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
-        Ok(Self { terminal, icons: Glyphs::new(nerd_font), palette })
+        Ok(Self { terminal, icons: Glyphs::new(nerd), palette })
+    }
+}
+
+/// Best-effort Nerd Font detection by measuring how many terminal columns a
+/// Nerd Font glyph advances the cursor. A real NF glyph is drawn single-width
+/// (advance 1); when the font lacks it, terminals usually substitute from an
+/// emoji/symbol fallback that renders double-width (advance 2). So advance == 1
+/// is our "likely present" signal.
+///
+/// This is a heuristic, not proof: a terminal that renders a missing glyph as a
+/// single-cell box would read as a false positive. That's why it only ever sets
+/// the *default* — an explicit `--nerd-font[=…]` or `TOPH_NERD_FONT` always wins,
+/// and an inconclusive probe falls back to emoji (the safe, widely-rendering
+/// choice). Returns `None` when stdout isn't a TTY or the terminal won't answer.
+///
+/// Assumes raw mode is already enabled (crossterm needs it to read the cursor
+/// position report) and that we're on a scratch surface (the alternate screen).
+fn probe_nerd_font() -> Option<bool> {
+    if !io::stdout().is_terminal() {
+        return None;
+    }
+    let mut out = io::stdout();
+    let start = cursor::position().ok()?.0;
+    write!(out, "\u{e0b0}").ok()?; // a Nerd Font powerline glyph
+    out.flush().ok()?;
+    let end = cursor::position().ok()?.0;
+    // Wipe the probe glyph; the first real frame will repaint anyway.
+    let _ = write!(out, "\r\x1b[2K");
+    let _ = out.flush();
+    match end.checked_sub(start) {
+        Some(1) => Some(true),  // single-width → likely a real NF glyph
+        Some(_) => Some(false), // double-width → emoji/symbol fallback
+        None => None,           // cursor wrapped/garbage → inconclusive
     }
 }
 

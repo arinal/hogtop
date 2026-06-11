@@ -33,18 +33,37 @@ struct Args {
     /// How many rows to print.
     #[arg(long, default_value_t = VIEW_SIZES[0])]
     top: usize,
-    /// Use Nerd Font glyphs for icons instead of emoji (requires a Nerd Font).
-    #[arg(long)]
-    nerd_font: bool,
+    /// Use Nerd Font glyphs for icons instead of emoji. Omit to auto-detect;
+    /// `--nerd-font` forces on, `--nerd-font=false` forces off. Also settable
+    /// via the `TOPH_NERD_FONT` env var.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    nerd_font: Option<bool>,
+}
+
+/// Explicit Nerd Font preference: the CLI flag wins, then the `TOPH_NERD_FONT`
+/// env var. `None` means "no explicit choice" — let the renderer auto-detect.
+fn nerd_font_pref(flag: Option<bool>) -> Option<bool> {
+    flag.or_else(env_nerd_font)
+}
+
+/// Parse `TOPH_NERD_FONT` as a boolean; unset or unrecognised yields `None`.
+fn env_nerd_font() -> Option<bool> {
+    match std::env::var("TOPH_NERD_FONT").ok()?.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" | "" => Some(false),
+        _ => None,
+    }
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    let nerd_font = nerd_font_pref(args.nerd_font);
     if args.once {
-        run_snapshot(args.secs, args.top, args.nerd_font)
+        // Snapshot mode has no interactive terminal to probe; without an
+        // explicit choice, default to emoji (renders almost everywhere).
+        run_snapshot(args.secs, args.top, nerd_font.unwrap_or(false))
     } else {
-        let nerd_font = args.nerd_font;
         let mut renderer = TuiRenderer::new(nerd_font)?;
         run(&mut renderer, control::Nix).await
     }

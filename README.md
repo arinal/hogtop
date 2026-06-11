@@ -59,13 +59,30 @@ with redirected stdin.
 
 ### Icons
 
-By default toph uses emoji glyphs, which render in most modern terminals. If
-you have a [Nerd Font](https://www.nerdfonts.com/) installed, pass `--nerd-font`
-for sharper, monospace-aligned icons:
+toph ships two glyph sets: emoji (renders in most modern terminals) and
+[Nerd Font](https://www.nerdfonts.com/) (sharper, monospace-aligned, needs a
+Nerd Font installed). The interactive TUI **auto-detects** which to use by
+probing the terminal, and falls back to emoji when the result is inconclusive.
+
+Override the detection explicitly, in order of precedence:
 
 ```sh
-toph --nerd-font
+toph --nerd-font            # force Nerd Font glyphs
+toph --nerd-font=false      # force emoji
+TOPH_NERD_FONT=1 toph       # env var (1/true/on or 0/false/off)
 ```
+
+To make a choice persistent, export the env var from your shell rc file:
+
+```sh
+# ~/.zshrc (or ~/.bashrc)
+export TOPH_NERD_FONT=1     # always use Nerd Font glyphs
+```
+
+Detection is best-effort — if your icons look like boxes (tofu), pass
+`--nerd-font=false`; if you have a Nerd Font but get emoji, pass `--nerd-font`.
+Snapshot mode (`--once`) can't probe, so it defaults to emoji unless told
+otherwise.
 
 ### Snapshot mode (non-interactive)
 
